@@ -23,11 +23,13 @@ import {
   formatDate,
   formatPercent,
 } from "@/lib/format";
+import { useI18n, useT } from "@/lib/i18n";
 import { useQueueSocket } from "@/ws/useQueueSocket";
 
 const ROW_H = 36;
 
 function WaitingTab({ search }: { search: string }) {
+  const t = useT();
   const { data } = useFiles({ status: "queued", search, order: "queue", limit: 1000 });
   const reorder = useReorderQueue();
   const fileAction = useFileAction();
@@ -62,14 +64,15 @@ function WaitingTab({ search }: { search: string }) {
   };
 
   return (
-    <div>
+    <div className="overflow-x-auto">
+      <div className="min-w-[720px]">
       <div className="grid grid-cols-[24px_1fr_90px_90px_90px_110px_90px] gap-2 border-b px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         <span />
-        <span>Fichier</span>
-        <span>Codec</span>
-        <span>Résolution</span>
-        <span>Bitrate</span>
-        <span>Gain estimé</span>
+        <span>{t("Fichier")}</span>
+        <span>{t("Codec")}</span>
+        <span>{t("Résolution")}</span>
+        <span>{t("Bitrate")}</span>
+        <span>{t("Gain estimé")}</span>
         <span />
       </div>
       <div ref={parentRef} className="h-[62vh] overflow-auto">
@@ -108,7 +111,7 @@ function WaitingTab({ search }: { search: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  title="Prioriser (tête de queue)"
+                  title={t("Prioriser (tête de queue)")}
                   onClick={() => fileAction.mutate({ id: file.id, action: "force" })}
                 >
                   <ArrowUpToLine className="h-3.5 w-3.5" />
@@ -119,20 +122,22 @@ function WaitingTab({ search }: { search: string }) {
         </div>
       </div>
       <div className="border-t px-2 py-1.5 text-xs text-muted-foreground">
-        {data?.meta.total ?? 0} fichier(s) en attente — glisser pour réordonner
+        {data?.meta.total ?? 0} {t("fichier(s) en attente — glisser pour réordonner")}
+      </div>
       </div>
     </div>
   );
 }
 
 function ActiveTab() {
+  const { t, tPhase } = useI18n();
   const { active } = useQueueSocket();
   const jobAction = useJobAction();
   return (
     <div className="space-y-2 py-2">
       {active.length === 0 && (
         <div className="py-8 text-center text-sm text-muted-foreground">
-          Aucun encodage en cours.
+          {t("Aucun encodage en cours.")}
         </div>
       )}
       {active.map((job) => (
@@ -144,6 +149,9 @@ function ActiveTab() {
             <div className="truncate font-mono text-xs" title={job.path}>
               {job.path}
             </div>
+            {job.phase && (
+              <div className="truncate text-[11px] text-primary">{tPhase(job.phase)}</div>
+            )}
             <div className="mt-1 h-1.5 overflow-hidden rounded bg-muted">
               <div
                 className="h-full bg-primary transition-all"
@@ -166,7 +174,7 @@ function ActiveTab() {
             className="text-destructive"
             onClick={() => jobAction.mutate({ id: job.job_id, action: "cancel" })}
           >
-            Annuler
+            {t("Annuler")}
           </Button>
         </div>
       ))}
@@ -175,6 +183,7 @@ function ActiveTab() {
 }
 
 function FinishedTab({ search }: { search: string }) {
+  const t = useT();
   const { data } = useJobs({ search, limit: 200 });
   const finished = useMemo(
     () =>
@@ -188,10 +197,10 @@ function FinishedTab({ search }: { search: string }) {
       <table className="w-full text-sm">
         <thead className="sticky top-0 bg-background">
           <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <th className="px-2 py-1.5">Date</th>
-            <th className="px-2 py-1.5">Fichier</th>
-            <th className="px-2 py-1.5">État</th>
-            <th className="px-2 py-1.5 text-right">Gain</th>
+            <th className="px-2 py-1.5">{t("Date")}</th>
+            <th className="px-2 py-1.5">{t("Fichier")}</th>
+            <th className="px-2 py-1.5">{t("État")}</th>
+            <th className="px-2 py-1.5 text-right">{t("Gain")}</th>
           </tr>
         </thead>
         <tbody>
@@ -219,6 +228,7 @@ function FinishedTab({ search }: { search: string }) {
 }
 
 export function QueuePage() {
+  const t = useT();
   const [search, setSearch] = useState("");
   const [actionResult, setActionResult] = useState<string | null>(null);
   const invalidate = useInvalidate();
@@ -233,7 +243,7 @@ export function QueuePage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-lg font-bold">Queue</h1>
+        <h1 className="text-lg font-bold">{t("Queue")}</h1>
         <div className="flex items-center gap-2">
           <Button
             variant="secondary"
@@ -241,7 +251,7 @@ export function QueuePage() {
             title="Remet en queue les jobs figés en running/validating qui ne tournent plus (après un arrêt brutal)"
             onClick={() => void runAction("/api/v1/queue/recover")}
           >
-            <RotateCcw className="h-3.5 w-3.5" /> Relancer les jobs bloqués
+            <RotateCcw className="h-3.5 w-3.5" /> {t("Relancer les jobs bloqués")}
           </Button>
           <Button
             variant="secondary"
@@ -249,17 +259,17 @@ export function QueuePage() {
             title="Re-queue les fichiers traités uniquement en dry-run (après passage en réel)"
             onClick={() => void runAction("/api/v1/files/requeue-dry-run")}
           >
-            <RefreshCw className="h-3.5 w-3.5" /> Re-queuer les dry-run
+            <RefreshCw className="h-3.5 w-3.5" /> {t("Re-queuer les dry-run")}
           </Button>
           {actionResult && (
             <span className="text-xs text-muted-foreground">{actionResult}</span>
           )}
         </div>
-        <div className="relative w-72">
+        <div className="relative w-full sm:w-72">
           <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
           <Input
             className="pl-7"
-            placeholder="Rechercher par chemin…"
+            placeholder={t("Rechercher par chemin…")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -267,9 +277,9 @@ export function QueuePage() {
       </div>
       <Tabs defaultValue="waiting">
         <TabsList>
-          <TabsTrigger value="waiting">En attente</TabsTrigger>
-          <TabsTrigger value="active">En cours</TabsTrigger>
-          <TabsTrigger value="finished">Terminés</TabsTrigger>
+          <TabsTrigger value="waiting">{t("En attente")}</TabsTrigger>
+          <TabsTrigger value="active">{t("En cours")}</TabsTrigger>
+          <TabsTrigger value="finished">{t("Terminés")}</TabsTrigger>
         </TabsList>
         <TabsContent value="waiting">
           <WaitingTab search={search} />

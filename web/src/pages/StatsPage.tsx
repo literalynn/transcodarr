@@ -26,6 +26,7 @@ import {
 } from "@/api/hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { basename, formatBytes, formatPercent } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 
 const COLORS = ["#3b82f6", "#22c55e", "#eab308", "#ef4444", "#a855f7", "#14b8a6", "#f97316"];
 
@@ -41,6 +42,7 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 }
 
 export function StatsPage() {
+  const t = useT();
   const { data: savings } = useSavingsOverTime();
   const { data: codecs } = useCodecStats();
   const { data: gainByBucket } = useGainByBucket();
@@ -70,10 +72,10 @@ export function StatsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-bold">Statistiques</h1>
+      <h1 className="text-lg font-bold">{t("Statistiques")}</h1>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="Espace récupéré (cumulé, Gio)">
+        <ChartCard title={t("Espace récupéré (cumulé, Gio)")}>
           <ResponsiveContainer>
             <AreaChart data={savingsData}>
               <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
@@ -94,7 +96,7 @@ export function StatsPage() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Répartition des codecs (bibliothèque actuelle)">
+        <ChartCard title={t("Répartition des codecs (bibliothèque actuelle)")}>
           <ResponsiveContainer>
             <PieChart>
               <Pie
@@ -117,7 +119,7 @@ export function StatsPage() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Gain moyen par bucket et codec cible (%)">
+        <ChartCard title={t("Gain moyen par bucket et codec cible (%)")}>
           <ResponsiveContainer>
             <BarChart data={gainData}>
               <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
@@ -132,7 +134,7 @@ export function StatsPage() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Débit d'encodage (fichiers/jour)">
+        <ChartCard title={t("Débit d'encodage (fichiers/jour)")}>
           <ResponsiveContainer>
             <BarChart data={throughputData}>
               <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
@@ -150,7 +152,7 @@ export function StatsPage() {
       {/* Progression par bibliothèque */}
       <Card>
         <CardHeader>
-          <CardTitle>Progression par bibliothèque (fichiers conformes)</CardTitle>
+          <CardTitle>{t("Progression par bibliothèque (fichiers conformes)")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {(progress ?? []).map((p) => (
@@ -173,7 +175,7 @@ export function StatsPage() {
         {/* Top 20 restants */}
         <Card>
           <CardHeader>
-            <CardTitle>Top fichiers les plus lourds non traités</CardTitle>
+            <CardTitle>{t("Top fichiers les plus lourds non traités")}</CardTitle>
           </CardHeader>
           <CardContent className="max-h-80 overflow-auto">
             <table className="w-full text-sm">
@@ -201,12 +203,12 @@ export function StatsPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              Échecs — taux : {formatPercent((failures?.failure_rate ?? 0) * 100)}
+              {t("Échecs — taux :")} {formatPercent((failures?.failure_rate ?? 0) * 100)}
             </CardTitle>
           </CardHeader>
           <CardContent className="max-h-80 space-y-1.5 overflow-auto">
             {(failures?.top_errors ?? []).length === 0 && (
-              <div className="text-sm text-muted-foreground">Aucun échec. 🎉</div>
+              <div className="text-sm text-muted-foreground">{t("Aucun échec. 🎉")}</div>
             )}
             {(failures?.top_errors ?? []).map((e, i) => (
               <div key={i} className="flex items-start justify-between gap-2 text-xs">

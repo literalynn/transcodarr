@@ -17,8 +17,113 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useQuery } from "@tanstack/react-query";
+import { fetchJson } from "@/api/client";
 import { basename, formatBytes, formatDuration, formatPercent } from "@/lib/format";
+import { useI18n, useT } from "@/lib/i18n";
 import { useQueueSocket } from "@/ws/useQueueSocket";
+
+interface ResourcesInfo {
+  cpu: { cores: number; app_percent: number | null; other_percent: number | null; host_percent: number | null };
+  memory: { total_bytes: number | null; app_bytes: number | null; other_bytes: number | null; used_bytes: number | null };
+  gpu: { busy_percent: number | null; freq_mhz: number | null; freq_max_mhz: number | null };
+}
+
+function SplitBar({
+  label,
+  appPart,
+  otherPart,
+  detail,
+}: {
+  label: string;
+  appPart: number | null;
+  otherPart: number | null;
+  detail: string;
+}) {
+  const t = useT();
+  return (
+    <div>
+      <div className="mb-0.5 flex justify-between text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono">{detail}</span>
+      </div>
+      <div className="flex h-2 overflow-hidden rounded bg-muted">
+        {appPart !== null && (
+          <div className="h-full bg-primary" style={{ width: `${Math.min(100, appPart)}%` }} title={t("app")} />
+        )}
+        {otherPart !== null && (
+          <div
+            className="h-full bg-muted-foreground/50"
+            style={{ width: `${Math.min(100, otherPart)}%` }}
+            title={t("reste du système")}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ResourcesCard() {
+  const t = useT();
+  const { data } = useQuery({
+    queryKey: ["stats", "resources"],
+    refetchInterval: 5000,
+    queryFn: () => fetchJson<ResourcesInfo>("/api/v1/stats/resources"),
+  });
+  if (!data) return null;
+  const { cpu, memory, gpu } = data;
+  const cpuDetail =
+    cpu.app_percent !== null
+      ? `${t("app")} ${cpu.app_percent.toFixed(0)}% · ${t("reste du système")} ${(cpu.other_percent ?? 0).toFixed(0)}%`
+      : t("indisponible");
+  const memDetail =
+    memory.app_bytes !== null && memory.total_bytes !== null
+      ? `${t("app")} ${formatBytes(memory.app_bytes)} / ${formatBytes(memory.total_bytes)}`
+      : t("indisponible");
+  const gpuDetail =
+    gpu.busy_percent !== null
+      ? `${gpu.busy_percent.toFixed(0)}%${gpu.freq_mhz ? ` · ${gpu.freq_mhz} MHz` : ""}`
+      : gpu.freq_mhz
+        ? `${gpu.freq_mhz}/${gpu.freq_max_mhz ?? "?"} MHz`
+        : t("indisponible");
+  const total = memory.total_bytes ?? 1;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("Ressources")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2.5">
+        <SplitBar
+          label="CPU"
+          appPart={cpu.app_percent}
+          otherPart={cpu.other_percent}
+          detail={cpuDetail}
+        />
+        <SplitBar
+          label="RAM"
+          appPart={memory.app_bytes !== null ? (memory.app_bytes / total) * 100 : null}
+          otherPart={memory.other_bytes !== null ? (memory.other_bytes / total) * 100 : null}
+          detail={memDetail}
+        />
+        <SplitBar
+          label="GPU"
+          appPart={gpu.busy_percent}
+          otherPart={null}
+          detail={gpuDetail}
+        />
+        <div className="flex gap-3 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-sm bg-primary" /> {t("app")}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2 w-2 rounded-sm bg-muted-foreground/50" />{" "}
+            {t("reste du système")}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -36,6 +141,7 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 
 function ActiveJobCard({ job, onLogs }: { job: ActiveJob; onLogs: () => void }) {
   const jobAction = useJobAction();
+  const { t, tPhase } = useI18n();
   return (
     <Card className="min-w-72 flex-1">
       <CardContent className="space-y-2 p-3">
@@ -58,15 +164,15 @@ function ActiveJobCard({ job, onLogs }: { job: ActiveJob; onLogs: () => void }) 
           <span>ETA {formatDuration(job.eta_s)}</span>
         </div>
         {job.phase && (
-          <div className="truncate text-xs text-primary" title={job.phase}>
-            {job.phase}
+          <div className="truncate text-xs text-primary" title={tPhase(job.phase) ?? ""}>
+            {tPhase(job.phase)}
           </div>
         )}
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="truncate">{job.gpu} · slot {job.slot}</span>
           <div className="flex gap-1">
             <Button size="sm" variant="ghost" onClick={onLogs}>
-              <FileText className="h-3.5 w-3.5" /> Logs
+              <FileText className="h-3.5 w-3.5" /> {t("Logs")}
             </Button>
             <Button
               size="sm"
@@ -74,7 +180,7 @@ function ActiveJobCard({ job, onLogs }: { job: ActiveJob; onLogs: () => void }) 
               className="text-destructive"
               onClick={() => jobAction.mutate({ id: job.job_id, action: "cancel" })}
             >
-              <XCircle className="h-3.5 w-3.5" /> Annuler
+              <XCircle className="h-3.5 w-3.5" /> {t("Annuler")}
             </Button>
           </div>
         </div>
@@ -84,6 +190,7 @@ function ActiveJobCard({ job, onLogs }: { job: ActiveJob; onLogs: () => void }) 
 }
 
 export function Dashboard() {
+  const t = useT();
   const { active } = useQueueSocket();
   const { data: summary } = useStatsSummary();
   const { data: queue } = useQueueState();
@@ -99,14 +206,14 @@ export function Dashboard() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold">Dashboard</h1>
+        <h1 className="text-lg font-bold">{t("Dashboard")}</h1>
         <div className="flex gap-2">
           <Button
             variant={paused ? "default" : "secondary"}
             onClick={() => queueAction.mutate({ action: paused ? "resume" : "pause" })}
           >
             {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-            {paused ? "Reprendre" : "Pause"}
+            {paused ? t("Reprendre") : t("Pause")}
           </Button>
           <Button
             variant="secondary"
@@ -117,7 +224,7 @@ export function Dashboard() {
               }
             }}
           >
-            <ScanSearch className="h-4 w-4" /> Lancer un scan
+            <ScanSearch className="h-4 w-4" /> {t("Lancer un scan")}
           </Button>
         </div>
       </div>
@@ -125,12 +232,12 @@ export function Dashboard() {
       {/* Bandeau jobs en cours (§7.1) */}
       <div>
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Jobs en cours ({active.length}/{totalSlots} slots)
+          {t("Jobs en cours")} ({active.length}/{totalSlots} {t("slots")})
         </h2>
         {active.length === 0 ? (
           <Card>
             <CardContent className="py-6 text-center text-sm text-muted-foreground">
-              {paused ? "Queue en pause." : "Aucun encodage en cours."}
+              {paused ? t("Queue en pause.") : t("Aucun encodage en cours.")}
             </CardContent>
           </Card>
         ) : (
@@ -147,23 +254,28 @@ export function Dashboard() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Kpi
-          label="Fichiers traités"
+          label={t("Fichiers traités")}
           value={`${summary?.processed ?? 0} / ${summary?.total_files ?? 0}`}
-          sub={`${summary?.queued ?? 0} en file d'attente`}
+          sub={`${summary?.queued ?? 0} ${t("en file d'attente")}`}
         />
-        <Kpi label="Espace récupéré" value={formatBytes(summary?.bytes_saved)} />
+        <Kpi label={t("Espace récupéré")} value={formatBytes(summary?.bytes_saved)} />
         <Kpi
-          label="Gain moyen"
+          label={t("Gain moyen")}
           value={formatPercent(summary?.avg_gain_percent)}
         />
         <Kpi
-          label="Débit"
+          label={t("Débit")}
           value={`${(summary?.throughput_files_per_hour ?? 0).toFixed(1)} f/h`}
-          sub="sur 24 h"
+          sub={t("sur 24 h")}
         />
-        <Kpi label="Temps restant estimé" value={formatDuration(summary?.eta_s)} />
+        <Kpi label={t("Temps restant estimé")} value={formatDuration(summary?.eta_s)} />
+      </div>
+
+      {/* Ressources machine (app vs système) */}
+      <div className="grid gap-3 md:grid-cols-2">
+        <ResourcesCard />
       </div>
 
       {/* Statut GPU */}
@@ -196,8 +308,7 @@ export function Dashboard() {
           {caps && !caps.libplacebo_dv && (
             <Card className="border-warning">
               <CardContent className="p-3 text-xs text-warning">
-                libplacebo sans support Dolby Vision : les fichiers DV P5 seront marqués
-                « non traité (politique) », jamais convertis en best-effort.
+                {t("libplacebo sans support Dolby Vision : les fichiers DV P5 seront marqués « non traité (politique) », jamais convertis en best-effort.")}
               </CardContent>
             </Card>
           )}
@@ -206,7 +317,7 @@ export function Dashboard() {
 
       <Dialog open={logJobId !== null} onOpenChange={(open) => !open && setLogJobId(null)}>
         <DialogContent className="max-w-3xl">
-          <DialogTitle>Log du job #{logJobId}</DialogTitle>
+          <DialogTitle>{t("Log du job")} #{logJobId}</DialogTitle>
           {logJobId !== null && <JobLogViewer jobId={logJobId} live />}
         </DialogContent>
       </Dialog>

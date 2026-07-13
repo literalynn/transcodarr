@@ -170,6 +170,8 @@ def default_app_settings(
         # full = décodage CPU intégral (§5.5.5) ; sample = 3 segments de 30 s
         "validation_decode": "full",
         "max_retries": 2,
+        # Abandon anticipé si la taille projetée dépasse le seuil de gain (§5.5.7)
+        "early_abort_no_gain": True,
         "progress_snapshot_interval_s": 10,
         # Intégration Jellyfin optionnelle (DateCreated, §5.1)
         "jellyfin_url": None,

@@ -1,5 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import type { HTMLAttributes } from "react";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
@@ -29,6 +30,7 @@ export function Badge({ className, variant, ...props }: BadgeProps) {
 
 /** Badge d'état sémantique pour fichiers et jobs (vert/rouge/ambre, §7). */
 export function StatusBadge({ status }: { status: string }) {
+  const t = useT();
   const variant =
     status === "done" || status === "success"
       ? "success"
@@ -55,5 +57,5 @@ export function StatusBadge({ status }: { status: string }) {
     success: "succès",
     cancelled: "annulé",
   };
-  return <Badge variant={variant}>{labels[status] ?? status}</Badge>;
+  return <Badge variant={variant}>{t(labels[status] ?? status)}</Badge>;
 }

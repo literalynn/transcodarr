@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Numeric, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from transcoder.core.resources import sample_resources
 from transcoder.db import get_db
+from transcoder.models import Gpu as GpuModel
 from transcoder.enums import JobState, MediaStatus
 from transcoder.models import Job, Library, MediaFile
 
@@ -20,6 +22,16 @@ _PROCESSED = (MediaStatus.DONE, MediaStatus.SKIPPED_NO_GAIN)
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(tz=datetime.timezone.utc)
+
+
+@router.get("/resources")
+async def resources(session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """CPU/RAM/GPU : consommation de l'app (cgroup) vs reste du système."""
+    gpu_row = (
+        await session.execute(select(GpuModel).where(GpuModel.enabled.is_(True)).limit(1))
+    ).scalar_one_or_none()
+    drm_node = gpu_row.drm_node if gpu_row is not None else "/dev/dri/renderD128"
+    return await sample_resources(drm_node)
 
 
 @router.get("/summary")

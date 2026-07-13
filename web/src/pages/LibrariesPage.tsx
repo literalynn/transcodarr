@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const BUCKETS = ["2160p", "1440p", "1080p", "720p", "576p", "480p"] as const;
@@ -32,6 +33,7 @@ const BUCKETS = ["2160p", "1440p", "1080p", "720p", "576p", "480p"] as const;
 // Tableau de bitrates éditable pour un codec (onglets HEVC / AV1, §7.5)
 // ---------------------------------------------------------------------------
 function BitrateTable({ libraryId, codec, active }: { libraryId: number; codec: Codec; active: boolean }) {
+  const t = useT();
   const { data: rules } = useBitrateRules(libraryId);
   const putRules = usePutBitrateRules();
   const [draft, setDraft] = useState<Record<string, { target: number; max: number; bufsize: number }>>({});
@@ -91,19 +93,19 @@ function BitrateTable({ libraryId, codec, active }: { libraryId: number; codec: 
     <div className={cn("rounded-md border", active && "ring-1 ring-primary/50")}>
       {active && (
         <div className="border-b bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-          Échelle active (codec de sortie de la bibliothèque)
+          {t("Échelle active (codec de sortie de la bibliothèque)")}
         </div>
       )}
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <th className="px-3 py-2">Bucket</th>
-            <th className="px-2 py-2">SDR cible</th>
-            <th className="px-2 py-2">SDR max</th>
-            <th className="px-2 py-2">SDR bufsize</th>
-            <th className="px-2 py-2">HDR cible</th>
-            <th className="px-2 py-2">HDR max</th>
-            <th className="px-2 py-2">HDR bufsize</th>
+            <th className="px-3 py-2">{t("Bucket")}</th>
+            <th className="px-2 py-2">{t("SDR cible")}</th>
+            <th className="px-2 py-2">{t("SDR max")}</th>
+            <th className="px-2 py-2">{t("SDR bufsize")}</th>
+            <th className="px-2 py-2">{t("HDR cible")}</th>
+            <th className="px-2 py-2">{t("HDR max")}</th>
+            <th className="px-2 py-2">{t("HDR bufsize")}</th>
           </tr>
         </thead>
         <tbody>
@@ -132,7 +134,7 @@ function BitrateTable({ libraryId, codec, active }: { libraryId: number; codec: 
       </table>
       <div className="flex justify-end border-t p-2">
         <Button size="sm" onClick={save} disabled={putRules.isPending}>
-          <Save className="h-3.5 w-3.5" /> Enregistrer l'échelle {codec.toUpperCase()} (kbps)
+          <Save className="h-3.5 w-3.5" /> {t("Enregistrer l'échelle")} {codec.toUpperCase()} (kbps)
         </Button>
       </div>
     </div>
@@ -143,6 +145,7 @@ function BitrateTable({ libraryId, codec, active }: { libraryId: number; codec: 
 // Éditeur d'une bibliothèque
 // ---------------------------------------------------------------------------
 function LibraryEditor({ library }: { library: Library }) {
+  const t = useT();
   const patch = usePatchLibrary();
   const del = useDeleteLibrary();
   const scan = useTriggerScan();
@@ -165,17 +168,17 @@ function LibraryEditor({ library }: { library: Library }) {
           <div className="flex items-center gap-3">
             <h3 className="font-semibold">{library.name}</h3>
             <span className="font-mono text-xs text-muted-foreground">{library.path}</span>
-            {!library.enabled && <Badge variant="warning">désactivée</Badge>}
-            {library.paused && <Badge variant="warning">en pause</Badge>}
+            {!library.enabled && <Badge variant="warning">{t("désactivée")}</Badge>}
+            {library.paused && <Badge variant="warning">{t("en pause")}</Badge>}
             {(library.dry_run ?? null) !== null && (
               <Badge variant={library.dry_run ? "warning" : "success"}>
-                dry-run : {library.dry_run ? "oui" : "non"} (surcharge)
+                {t("dry-run :")} {library.dry_run ? t("oui") : t("non")} {t("(surcharge)")}
               </Badge>
             )}
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="secondary" onClick={() => scan.mutate(library.id)}>
-              <ScanSearch className="h-3.5 w-3.5" /> Scanner
+              <ScanSearch className="h-3.5 w-3.5" /> {t("Scanner")}
             </Button>
             <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="h-3.5 w-3.5" />
@@ -183,9 +186,9 @@ function LibraryEditor({ library }: { library: Library }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <Label>Codec de sortie</Label>
+            <Label>{t("Codec de sortie")}</Label>
             <Select
               value={library.output_codec}
               onChange={(e) => void requestCodecChange(e.target.value as Codec)}
@@ -195,7 +198,7 @@ function LibraryEditor({ library }: { library: Library }) {
             </Select>
           </div>
           <div>
-            <Label>Conteneur</Label>
+            <Label>{t("Conteneur")}</Label>
             <Select
               value={library.container}
               onChange={(e) =>
@@ -205,12 +208,12 @@ function LibraryEditor({ library }: { library: Library }) {
                 })
               }
             >
-              <option value="mkv">MKV (recommandé)</option>
+              <option value="mkv">{t("MKV (recommandé)")}</option>
               <option value="mp4">MP4</option>
             </Select>
           </div>
           <div>
-            <Label>Politique HDR</Label>
+            <Label>{t("Politique HDR")}</Label>
             <Select
               value={library.hdr_policy}
               onChange={(e) =>
@@ -220,13 +223,13 @@ function LibraryEditor({ library }: { library: Library }) {
                 })
               }
             >
-              <option value="preserve">Préserver le HDR</option>
-              <option value="tonemap_sdr">Tonemap vers SDR</option>
-              <option value="skip_hdr_files">Ignorer les fichiers HDR</option>
+              <option value="preserve">{t("Préserver le HDR")}</option>
+              <option value="tonemap_sdr">{t("Tonemap vers SDR")}</option>
+              <option value="skip_hdr_files">{t("Ignorer les fichiers HDR")}</option>
             </Select>
           </div>
           <div>
-            <Label>Politique Dolby Vision</Label>
+            <Label>{t("Politique Dolby Vision")}</Label>
             <Select
               value={library.dv_policy}
               onChange={(e) =>
@@ -236,12 +239,12 @@ function LibraryEditor({ library }: { library: Library }) {
                 })
               }
             >
-              <option value="convert_to_hdr10">Convertir en HDR10</option>
-              <option value="skip_dv_files">Ignorer les fichiers DV</option>
+              <option value="convert_to_hdr10">{t("Convertir en HDR10")}</option>
+              <option value="skip_dv_files">{t("Ignorer les fichiers DV")}</option>
             </Select>
           </div>
           <div>
-            <Label>Ne traiter que les fichiers ajoutés après le…</Label>
+            <Label>{t("Ne traiter que les fichiers ajoutés après le…")}</Label>
             <Input
               type="datetime-local"
               defaultValue={library.date_filter_after?.slice(0, 16) ?? ""}
@@ -256,7 +259,7 @@ function LibraryEditor({ library }: { library: Library }) {
             />
           </div>
           <div>
-            <Label>Gain minimal (%)</Label>
+            <Label>{t("Gain minimal (%)")}</Label>
             <Input
               type="number"
               defaultValue={library.min_gain_percent}
@@ -269,7 +272,7 @@ function LibraryEditor({ library }: { library: Library }) {
             />
           </div>
           <div>
-            <Label>Priorité</Label>
+            <Label>{t("Priorité")}</Label>
             <Input
               type="number"
               defaultValue={library.priority}
@@ -279,7 +282,7 @@ function LibraryEditor({ library }: { library: Library }) {
             />
           </div>
           <div>
-            <Label>Cron de scan</Label>
+            <Label>{t("Cron de scan")}</Label>
             <Input
               className="font-mono"
               defaultValue={library.scan_cron ?? ""}
@@ -295,7 +298,7 @@ function LibraryEditor({ library }: { library: Library }) {
             />
           </div>
           <div className="col-span-2">
-            <Label>Exclusions (globs, séparés par des virgules)</Label>
+            <Label>{t("Exclusions (globs, séparés par des virgules)")}</Label>
             <Input
               className="font-mono"
               defaultValue={library.exclude_globs.join(", ")}
@@ -319,20 +322,20 @@ function LibraryEditor({ library }: { library: Library }) {
                 checked={library.enabled}
                 onCheckedChange={(enabled) => patch.mutate({ id: library.id, patch: { enabled } })}
               />
-              <Label>Activée</Label>
+              <Label>{t("Activée")}</Label>
             </div>
             <div className="flex items-center gap-2">
               <Switch
                 checked={library.dry_run ?? false}
                 onCheckedChange={(v) => patch.mutate({ id: library.id, patch: { dry_run: v } })}
               />
-              <Label>Dry-run</Label>
+              <Label>{t("Dry-run")}</Label>
               {(library.dry_run ?? null) !== null && (
                 <button
                   className="text-xs text-primary underline"
                   onClick={() => patch.mutate({ id: library.id, patch: { clear_dry_run: true } })}
                 >
-                  hériter du global
+                  {t("hériter du global")}
                 </button>
               )}
             </div>
@@ -343,10 +346,10 @@ function LibraryEditor({ library }: { library: Library }) {
         <Tabs defaultValue={library.output_codec}>
           <TabsList>
             <TabsTrigger value="hevc">
-              Échelle HEVC {library.output_codec === "hevc" && "●"}
+              {t("Échelle HEVC")} {library.output_codec === "hevc" && "●"}
             </TabsTrigger>
             <TabsTrigger value="av1">
-              Échelle AV1 {library.output_codec === "av1" && "●"}
+              {t("Échelle AV1")} {library.output_codec === "av1" && "●"}
             </TabsTrigger>
           </TabsList>
           <TabsContent value="hevc" className="mt-2">
@@ -369,7 +372,7 @@ function LibraryEditor({ library }: { library: Library }) {
       {/* Confirmation de changement de codec (§7.5) */}
       <Dialog open={confirmCodec !== null} onOpenChange={(o) => !o && setConfirmCodec(null)}>
         <DialogContent>
-          <DialogTitle>Changer le codec de sortie ?</DialogTitle>
+          <DialogTitle>{t("Changer le codec de sortie ?")}</DialogTitle>
           <p className="text-sm">
             Passer <b>{library.name}</b> en{" "}
             <b>{confirmCodec?.codec.toUpperCase()}</b> remettra en file d'attente{" "}
@@ -378,7 +381,7 @@ function LibraryEditor({ library }: { library: Library }) {
           </p>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setConfirmCodec(null)}>
-              Annuler
+              {t("Annuler")}
             </Button>
             <Button
               onClick={() => {
@@ -388,7 +391,7 @@ function LibraryEditor({ library }: { library: Library }) {
                 setConfirmCodec(null);
               }}
             >
-              Confirmer le changement
+              {t("Confirmer le changement")}
             </Button>
           </div>
         </DialogContent>
@@ -397,14 +400,14 @@ function LibraryEditor({ library }: { library: Library }) {
       {/* Confirmation de suppression */}
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
-          <DialogTitle>Supprimer la bibliothèque ?</DialogTitle>
+          <DialogTitle>{t("Supprimer la bibliothèque ?")}</DialogTitle>
           <p className="text-sm">
             Supprime <b>{library.name}</b>, ses règles, son historique de jobs et l'état de
             ses fichiers. Les fichiers médias sur disque ne sont PAS touchés.
           </p>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setConfirmDelete(false)}>
-              Annuler
+              {t("Annuler")}
             </Button>
             <Button
               variant="destructive"
@@ -413,7 +416,7 @@ function LibraryEditor({ library }: { library: Library }) {
                 setConfirmDelete(false);
               }}
             >
-              Supprimer
+              {t("Supprimer")}
             </Button>
           </div>
         </DialogContent>
@@ -426,6 +429,7 @@ function LibraryEditor({ library }: { library: Library }) {
 // Page
 // ---------------------------------------------------------------------------
 export function LibrariesPage() {
+  const t = useT();
   const { data: libraries } = useLibraries();
   const create = useCreateLibrary();
   const [showCreate, setShowCreate] = useState(false);
@@ -436,9 +440,9 @@ export function LibrariesPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold">Bibliothèques</h1>
+        <h1 className="text-lg font-bold">{t("Bibliothèques")}</h1>
         <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4" /> Ajouter
+          <Plus className="h-4 w-4" /> {t("Ajouter")}
         </Button>
       </div>
       {(libraries ?? []).map((lib) => (
@@ -447,14 +451,14 @@ export function LibrariesPage() {
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
-          <DialogTitle>Nouvelle bibliothèque</DialogTitle>
+          <DialogTitle>{t("Nouvelle bibliothèque")}</DialogTitle>
           <div className="space-y-3">
             <div>
-              <Label>Nom</Label>
+              <Label>{t("Nom")}</Label>
               <Input value={newName} onChange={(e) => setNewName(e.target.value)} />
             </div>
             <div>
-              <Label>Chemin (validé côté serveur)</Label>
+              <Label>{t("Chemin (validé côté serveur)")}</Label>
               <Input
                 className="font-mono"
                 placeholder="/srv/storage/…"
@@ -465,7 +469,7 @@ export function LibrariesPage() {
             {createError && <p className="text-sm text-destructive">{createError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setShowCreate(false)}>
-                Annuler
+                {t("Annuler")}
               </Button>
               <Button
                 disabled={!newName || !newPath || create.isPending}
@@ -481,13 +485,13 @@ export function LibrariesPage() {
                       },
                       onError: (err) =>
                         setCreateError(
-                          (err as { detail?: string }).detail ?? "création impossible",
+                          (err as { detail?: string }).detail ?? t("création impossible"),
                         ),
                     },
                   )
                 }
               >
-                Créer
+                {t("Créer")}
               </Button>
             </div>
           </div>

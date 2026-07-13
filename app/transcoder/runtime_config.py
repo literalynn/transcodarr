@@ -40,6 +40,7 @@ class RuntimeConfig:
     dv_chroma_delta_max: float
     validation_decode: str
     max_retries: int
+    early_abort_no_gain: bool
     progress_snapshot_interval_s: int
     jellyfin_url: str | None
     jellyfin_api_key: str | None
@@ -93,6 +94,7 @@ def config_from_values(values: dict[str, Any]) -> RuntimeConfig:
         dv_chroma_delta_max=_float(values, "dv_chroma_delta_max", 8.0),
         validation_decode=_str(values, "validation_decode", "full"),
         max_retries=_int(values, "max_retries", 2),
+        early_abort_no_gain=_bool(values, "early_abort_no_gain", True),
         progress_snapshot_interval_s=_int(values, "progress_snapshot_interval_s", 10),
         jellyfin_url=_opt_str(values, "jellyfin_url"),
         jellyfin_api_key=_opt_str(values, "jellyfin_api_key"),

@@ -292,9 +292,45 @@ class QueueManager:
             # --- Encodage ------------------------------------------------------
             last_snapshot = 0.0
             last_progress_log = 0.0
+            early_abort_no_gain = False
+            src_size_for_abort = (
+                os.path.getsize(probe.path) if os.path.exists(probe.path) else 0
+            )
+            # Seuil §5.5.7 avec 5 % de marge : la projection VBR est bruitée,
+            # on n'abandonne que si le dépassement est franc.
+            no_gain_threshold = (
+                src_size_for_abort
+                * (1.0 - library_snapshot["min_gain_percent"] / 100.0)
+                * 1.05
+            )
 
             async def on_progress(u: ProgressUpdate) -> None:
-                nonlocal last_snapshot, last_progress_log
+                nonlocal last_snapshot, last_progress_log, early_abort_no_gain
+                # Abandon anticipé (façon Tdarr) : dès 15 % encodés, si la
+                # taille PROJETÉE dépasse déjà le seuil de gain, inutile de
+                # finir — surtout sur un gros 4K (§5.5.7, early_abort_no_gain)
+                if (
+                    config.early_abort_no_gain
+                    and not early_abort_no_gain
+                    and src_size_for_abort > 0
+                    and u.percent is not None
+                    and u.percent >= 15.0
+                    and u.total_size_bytes is not None
+                ):
+                    projected = u.total_size_bytes / (u.percent / 100.0)
+                    if projected > no_gain_threshold:
+                        early_abort_no_gain = True
+                        logger.info(
+                            "Job %d : ABANDON ANTICIPÉ à %.0f%% — taille projetée "
+                            "%.2f Gio > seuil %.2f Gio (gain insuffisant)",
+                            job_id,
+                            u.percent,
+                            projected / 1024**3,
+                            no_gain_threshold / 1024**3,
+                        )
+                        self._set_phase(job_id, "abandon anticipé : gain projeté insuffisant")
+                        cancel_event.set()
+                        return
                 now_mono = time.monotonic()
                 if now_mono - last_progress_log >= 30.0:
                     last_progress_log = now_mono
@@ -358,6 +394,11 @@ class QueueManager:
                 result.avg_fps,
                 result.avg_speed,
             )
+            if early_abort_no_gain:
+                await self._finalize_early_no_gain(
+                    work, rule, tmp_path, result.log_tail, result.exit_code
+                )
+                return
             if result.cancelled:
                 await self._finalize_cancelled(work, result.log_tail, result.exit_code)
                 return
@@ -676,6 +717,43 @@ class QueueManager:
                     mf.status = MediaStatus.FAILED
         event_bus.publish_queue(
             {"type": "job_failed", "job_id": work.job_id, "error": message}
+        )
+
+    async def _finalize_early_no_gain(
+        self,
+        work: _ClaimedWork,
+        rule: ResolvedRule,
+        tmp_path: str,
+        log_tail: str,
+        exit_code: int,
+    ) -> None:
+        """Encodage interrompu car la projection de taille dépassait le seuil
+        de gain : même issue que le contrôle 7 (§5.5.7) — original conservé,
+        fichier marqué traité pour ne pas être retenté, temporaire supprimé."""
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        async with session_scope() as session:
+            job = await session.get(Job, work.job_id)
+            mf = await session.get(MediaFile, work.media_id)
+            if job is not None:
+                job.state = JobState.SKIPPED_NO_GAIN
+                job.exit_code = exit_code
+                job.error_message = (
+                    "abandon anticipé : taille projetée au-dessus du seuil de gain"
+                )
+                job.log_tail = log_tail
+                job.dst_path = None
+                job.finished_at = _now()
+                if job.started_at is not None:
+                    job.duration_s = decimal.Decimal(
+                        f"{(job.finished_at - job.started_at).total_seconds():.3f}"
+                    )
+            if mf is not None:
+                mf.status = MediaStatus.SKIPPED_NO_GAIN
+                mf.applied_rule_hash = rule.rule_hash
+                mf.last_error = None
+        event_bus.publish_queue(
+            {"type": "job_no_gain", "job_id": work.job_id, "early": True}
         )
 
     async def _finalize_cancelled(

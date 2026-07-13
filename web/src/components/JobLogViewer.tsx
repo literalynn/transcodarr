@@ -3,9 +3,11 @@
 import { Download, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { useT } from "@/lib/i18n";
 import { useJobLogSocket } from "@/ws/useJobLogSocket";
 
 export function JobLogViewer({ jobId, live = true }: { jobId: number; live?: boolean }) {
+  const t = useT();
   const { lines, percent, fps, speed } = useJobLogSocket(live ? jobId : null);
   const [staticLines, setStaticLines] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -44,7 +46,7 @@ export function JobLogViewer({ jobId, live = true }: { jobId: number; live?: boo
           <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
           <Input
             className="pl-7"
-            placeholder="Rechercher dans le log…"
+            placeholder={t("Rechercher dans le log…")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -58,12 +60,12 @@ export function JobLogViewer({ jobId, live = true }: { jobId: number; live?: boo
           href={`/api/v1/jobs/${jobId}/log?download=true`}
           className="flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs hover:bg-accent"
         >
-          <Download className="h-3.5 w-3.5" /> Télécharger
+          <Download className="h-3.5 w-3.5" /> {t("Télécharger")}
         </a>
       </div>
       <div className="log-viewer max-h-96 flex-1 overflow-auto rounded-md border bg-black/40 p-2 font-mono text-xs leading-relaxed">
         {visible.length === 0 ? (
-          <span className="text-muted-foreground">(log vide)</span>
+          <span className="text-muted-foreground">{t("(log vide)")}</span>
         ) : (
           visible.map((line, i) => (
             <div key={i} className="whitespace-pre-wrap break-all">

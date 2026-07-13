@@ -233,3 +233,25 @@ Documents » contient un espace) → les faux binaires des tests utilisent
 un wrapper /bin/sh au lieu d'un shebang python (les shebangs ne supportent
 pas les espaces). Historique git réinitialisé après un déplacement de
 dossier sans fichiers cachés ; remote : github.com/literalynn/transcodarr.
+
+## 2026-07-14 — Abandon anticipé, monitoring ressources, mobile, i18n FR/EN
+
+- **Abandon anticipé « gain insuffisant »** (façon Tdarr) : dès 15 %
+  d'encodage, si la taille projetée (`total_size` de `-progress` ÷ avancement)
+  dépasse le seuil de gain de la bibliothèque (+5 % de marge anti-bruit VBR),
+  l'encodage est interrompu → job/fichier `skipped_no_gain`, tmp supprimé,
+  original intact. Évite de finir un 4K DV de 2 h pour rien. Réglage
+  `early_abort_no_gain` (défaut : activé), désactivable dans l'UI.
+- **Monitoring ressources** : `GET /stats/resources` sépare l'app (cgroup v2
+  du conteneur : cpu.stat/memory.current) du reste du système (/proc/stat,
+  /proc/meminfo qui exposent l'HÔTE) ; GPU best-effort via intel_gpu_top -J
+  (paquet ajouté à l'image + CAP_PERFMON dans le compose), repli fréquences
+  sysfs, null si indisponible. Carte Dashboard avec barres empilées
+  app/système, rafraîchie toutes les 5 s.
+- **Mobile** : sidebar → drawer avec hamburger sous md, grilles en 1 colonne,
+  tables à défilement horizontal, recherche pleine largeur. Vérifié au
+  viewport 375×812.
+- **i18n** : français = clé, dictionnaire EN (`web/src/lib/i18n.tsx`),
+  bascule FR/EN persistée (localStorage) dans le pied de la sidebar. Les
+  phases envoyées par le backend (français) sont traduites côté client par
+  table de préfixes. App renommée « Transcodarr » (UI + titre d'onglet).

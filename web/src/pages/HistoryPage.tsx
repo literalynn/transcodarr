@@ -8,6 +8,7 @@ import { JobLogViewer } from "@/components/JobLogViewer";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
+import { useT } from "@/lib/i18n";
 import {
   basename,
   formatBitrate,
@@ -55,8 +56,9 @@ function toCsv(jobs: Job[]): string {
 }
 
 function ExpandedRow({ jobId }: { jobId: number }) {
+  const t = useT();
   const { data: job } = useJobDetail(jobId);
-  if (!job) return <div className="p-4 text-sm text-muted-foreground">Chargement…</div>;
+  if (!job) return <div className="p-4 text-sm text-muted-foreground">{t("Chargement…")}</div>;
   const cmd = (job.ffmpeg_cmd ?? []).join(" ");
   return (
     <div className="space-y-3 bg-accent/20 p-4">
@@ -64,10 +66,11 @@ function ExpandedRow({ jobId }: { jobId: number }) {
       <div className="grid grid-cols-2 gap-4">
         {(["avant", "après"] as const).map((side) => {
           const isSrc = side === "avant";
+          const sideLabel = t(side);
           return (
             <div key={side} className="rounded-md border bg-card p-3">
               <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-                {side}
+                {sideLabel}
               </div>
               <dl className="space-y-1 font-mono text-xs">
                 <div className="flex justify-between">
@@ -99,7 +102,7 @@ function ExpandedRow({ jobId }: { jobId: number }) {
       {job.validation_report && (
         <div className="rounded-md border bg-card p-3">
           <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
-            Rapport de validation
+            {t("Rapport de validation")}
           </div>
           <div className="flex flex-wrap gap-1.5">
             {(
@@ -123,10 +126,10 @@ function ExpandedRow({ jobId }: { jobId: number }) {
       <div className="rounded-md border bg-card p-3">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-xs font-semibold uppercase text-muted-foreground">
-            Commande FFmpeg
+            {t("Commande FFmpeg")}
           </span>
           <Button size="sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(cmd)}>
-            <Copy className="h-3.5 w-3.5" /> Copier
+            <Copy className="h-3.5 w-3.5" /> {t("Copier")}
           </Button>
         </div>
         <code className="block max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">
@@ -140,6 +143,7 @@ function ExpandedRow({ jobId }: { jobId: number }) {
 }
 
 export function HistoryPage() {
+  const t = useT();
   const [state, setState] = useState("");
   const [libraryId, setLibraryId] = useState("");
   const [search, setSearch] = useState("");
@@ -169,10 +173,10 @@ export function HistoryPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-bold">Historique</h1>
+        <h1 className="text-lg font-bold">{t("Historique")}</h1>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={libraryId} onChange={(e) => setLibraryId(e.target.value)} className="w-40">
-            <option value="">Toutes les bibliothèques</option>
+            <option value="">{t("Toutes les bibliothèques")}</option>
             {(libraries ?? []).map((lib) => (
               <option key={lib.id} value={lib.id}>
                 {lib.name}
@@ -182,13 +186,13 @@ export function HistoryPage() {
           <Select value={state} onChange={(e) => setState(e.target.value)} className="w-40">
             {JOB_STATES.map((s) => (
               <option key={s} value={s}>
-                {s === "" ? "Tous les états" : s}
+                {s === "" ? t("Tous les états") : s}
               </option>
             ))}
           </Select>
           <Input
             className="w-56"
-            placeholder="Rechercher un fichier…"
+            placeholder={t("Rechercher un fichier…")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -203,15 +207,15 @@ export function HistoryPage() {
           <thead>
             <tr className="border-b bg-card text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="w-6 px-2 py-2" />
-              <th className="px-2 py-2">Date</th>
-              <th className="px-2 py-2">Fichier</th>
-              <th className="px-2 py-2">Durée</th>
-              <th className="px-2 py-2">Codec</th>
-              <th className="px-2 py-2">HDR</th>
-              <th className="px-2 py-2">Bitrate</th>
-              <th className="px-2 py-2">Taille</th>
-              <th className="px-2 py-2 text-right">Gain</th>
-              <th className="px-2 py-2">État</th>
+              <th className="px-2 py-2">{t("Date")}</th>
+              <th className="px-2 py-2">{t("Fichier")}</th>
+              <th className="px-2 py-2">{t("Durée")}</th>
+              <th className="px-2 py-2">{t("Codec")}</th>
+              <th className="px-2 py-2">{t("HDR")}</th>
+              <th className="px-2 py-2">{t("Bitrate")}</th>
+              <th className="px-2 py-2">{t("Taille")}</th>
+              <th className="px-2 py-2 text-right">{t("Gain")}</th>
+              <th className="px-2 py-2">{t("État")}</th>
               <th className="px-2 py-2" />
             </tr>
           </thead>
@@ -238,7 +242,7 @@ export function HistoryPage() {
                         {basename(job.src_path ?? "")}
                       </span>
                       <button
-                        title="Copier le chemin complet"
+                        title={t("Copier le chemin complet")}
                         onClick={(e) => {
                           e.stopPropagation();
                           void navigator.clipboard.writeText(job.src_path ?? "");
@@ -278,7 +282,7 @@ export function HistoryPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        title="Réessayer"
+                        title={t("Réessayer")}
                         onClick={(e) => {
                           e.stopPropagation();
                           jobAction.mutate({ id: job.id, action: "retry" });
@@ -304,7 +308,7 @@ export function HistoryPage() {
 
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>
-          {data?.meta.total ?? 0} job(s) — page {Math.floor(offset / limit) + 1}
+          {data?.meta.total ?? 0} {t("job(s) — page")} {Math.floor(offset / limit) + 1}
         </span>
         <div className="flex gap-2">
           <Button
@@ -313,7 +317,7 @@ export function HistoryPage() {
             disabled={offset === 0}
             onClick={() => setOffset(Math.max(0, offset - limit))}
           >
-            Précédent
+            {t("Précédent")}
           </Button>
           <Button
             variant="outline"
@@ -321,7 +325,7 @@ export function HistoryPage() {
             disabled={offset + limit >= (data?.meta.total ?? 0)}
             onClick={() => setOffset(offset + limit)}
           >
-            Suivant
+            {t("Suivant")}
           </Button>
         </div>
       </div>

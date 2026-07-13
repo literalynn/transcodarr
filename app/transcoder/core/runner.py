@@ -34,6 +34,9 @@ class ProgressUpdate:
     fps: float | None
     speed: float | None
     bitrate_kbps: float | None
+    # Taille déjà écrite par le muxer : permet de PROJETER la taille finale
+    # et d'abandonner tôt un encodage sans gain (early_abort_no_gain)
+    total_size_bytes: int | None
     eta_s: float | None
     finished: bool
 
@@ -82,6 +85,8 @@ def parse_progress_block(block: dict[str, str], duration_s: float | None) -> Pro
     bitrate = None
     if bitrate_raw.endswith("kbits/s"):
         bitrate = _parse_float(bitrate_raw[: -len("kbits/s")])
+    total_size_raw = _parse_float(block.get("total_size", ""))
+    total_size = int(total_size_raw) if total_size_raw and total_size_raw > 0 else None
 
     percent: float | None = None
     eta_s: float | None = None
@@ -96,6 +101,7 @@ def parse_progress_block(block: dict[str, str], duration_s: float | None) -> Pro
         fps=fps if fps and fps > 0 else None,
         speed=speed if speed and speed > 0 else None,
         bitrate_kbps=bitrate,
+        total_size_bytes=total_size,
         eta_s=eta_s,
         finished=block.get("progress") == "end",
     )

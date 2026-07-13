@@ -50,6 +50,7 @@ EXPECTED_ENDPOINTS: list[tuple[str, str]] = [
     ("post", "/api/v1/files/{file_id}/force"),
     ("post", "/api/v1/files/{file_id}/ignore"),
     ("post", "/api/v1/files/{file_id}/reset"),
+    ("get", "/api/v1/stats/resources"),
     ("get", "/api/v1/stats/summary"),
     ("get", "/api/v1/stats/savings-over-time"),
     ("get", "/api/v1/stats/codecs"),

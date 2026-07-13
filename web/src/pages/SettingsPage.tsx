@@ -16,11 +16,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { useT } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // GPU
 // ---------------------------------------------------------------------------
 function GpuRow({ gpu }: { gpu: Gpu }) {
+  const t = useT();
   const { patch, remove, test } = useGpuMutations();
   const { data: caps } = useCapabilities();
   const gpuCap = caps?.gpus.find((g) => g.gpu_id === gpu.id);
@@ -51,7 +53,7 @@ function GpuRow({ gpu }: { gpu: Gpu }) {
           <option value="vaapi">VAAPI</option>
         </Select>
         <div className="flex items-center gap-1">
-          <Label>Workers</Label>
+          <Label>{t("Workers")}</Label>
           <Input
             type="number"
             min={1}
@@ -68,7 +70,7 @@ function GpuRow({ gpu }: { gpu: Gpu }) {
             checked={gpu.enabled}
             onCheckedChange={(enabled) => patch.mutate({ id: gpu.id, patch: { enabled } })}
           />
-          <Label>Activé</Label>
+          <Label>{t("Activé")}</Label>
         </div>
         <div className="ml-auto flex gap-2">
           <Button
@@ -85,7 +87,7 @@ function GpuRow({ gpu }: { gpu: Gpu }) {
             }
           >
             <FlaskConical className="h-3.5 w-3.5" />
-            {test.isPending ? "Test en cours…" : "Tester le GPU"}
+            {test.isPending ? t("Test en cours…") : t("Tester le GPU")}
           </Button>
           <Button size="sm" variant="destructive" onClick={() => remove.mutate(gpu.id)}>
             <Trash2 className="h-3.5 w-3.5" />
@@ -93,8 +95,8 @@ function GpuRow({ gpu }: { gpu: Gpu }) {
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {gpuCap?.fell_back_to_vaapi && <Badge variant="warning">fallback VAAPI actif</Badge>}
-        {gpuCap?.p5_zero_copy && <Badge variant="info">DV P5 zéro-copie OK</Badge>}
+        {gpuCap?.fell_back_to_vaapi && <Badge variant="warning">{t("fallback VAAPI actif")}</Badge>}
+        {gpuCap?.p5_zero_copy && <Badge variant="info">{t("DV P5 zéro-copie OK")}</Badge>}
         {Object.entries(testResult ?? gpuCap?.encoders ?? {}).map(([name, r]) => (
           <Badge key={name} variant={r.ok ? "success" : "destructive"} title={r.error ?? ""}>
             {name} {r.ok ? "✓" : "✗"}
@@ -107,6 +109,7 @@ function GpuRow({ gpu }: { gpu: Gpu }) {
 }
 
 function GpuSection() {
+  const t = useT();
   const { data: gpus } = useGpus();
   const { create } = useGpuMutations();
   const [detected, setDetected] = useState<string[]>([]);
@@ -120,11 +123,11 @@ function GpuSection() {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          GPU
+          {t("GPU")}
         </h2>
         <div className="flex gap-2">
           <Button size="sm" variant="secondary" onClick={() => void detect()}>
-            Détecter les nodes
+            {t("Détecter les nodes")}
           </Button>
           <Button
             size="sm"
@@ -138,13 +141,13 @@ function GpuSection() {
               })
             }
           >
-            <Plus className="h-3.5 w-3.5" /> Ajouter
+            <Plus className="h-3.5 w-3.5" /> {t("Ajouter")}
           </Button>
         </div>
       </div>
       {detected.length > 0 && (
         <div className="text-xs text-muted-foreground">
-          Nodes détectés : <span className="font-mono">{detected.join(", ")}</span>
+          {t("Nodes détectés :")} <span className="font-mono">{detected.join(", ")}</span>
         </div>
       )}
       {(gpus ?? []).map((gpu) => (
@@ -179,6 +182,7 @@ const SETTING_FIELDS: {
   { key: "dv_ssim_threshold", label: "Seuil SSIM DV (contrôle 9)", type: "number" },
   { key: "dv_chroma_delta_max", label: "Écart chroma max DV", type: "number" },
   { key: "max_retries", label: "Retries max", type: "number" },
+  { key: "early_abort_no_gain", label: "Abandon anticipé si gain projeté insuffisant", type: "bool" },
   { key: "ffmpeg_path", label: "Chemin ffmpeg", type: "text", mono: true },
   { key: "ffprobe_path", label: "Chemin ffprobe", type: "text", mono: true },
   { key: "dovi_tool_path", label: "Chemin dovi_tool", type: "text", mono: true },
@@ -188,6 +192,7 @@ const SETTING_FIELDS: {
 ];
 
 function SettingsSection() {
+  const t = useT();
   const { data: settings } = useSettings();
   const patchSettings = usePatchSettings();
   const values = settings?.values ?? {};
@@ -197,7 +202,7 @@ function SettingsSection() {
   return (
     <div className="space-y-3">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Réglages globaux (appliqués à chaud, sans redémarrage)
+        {t("Réglages globaux (appliqués à chaud, sans redémarrage)")}
       </h2>
       <Card>
         <CardContent className="grid grid-cols-1 gap-x-6 gap-y-3 p-4 md:grid-cols-2">
@@ -205,7 +210,7 @@ function SettingsSection() {
             const raw = values[field.key];
             return (
               <div key={field.key} className="flex items-center justify-between gap-3">
-                <Label className="flex-1">{field.label}</Label>
+                <Label className="flex-1">{t(field.label)}</Label>
                 {field.type === "bool" ? (
                   <Switch
                     checked={Boolean(raw)}
@@ -249,6 +254,7 @@ function SettingsSection() {
 // Export / import de configuration (§9.5.10)
 // ---------------------------------------------------------------------------
 function ConfigSection() {
+  const t = useT();
   const invalidate = useInvalidate();
   const fileRef = useRef<HTMLInputElement>(null);
   const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -282,18 +288,18 @@ function ConfigSection() {
   return (
     <div className="space-y-3">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Sauvegarde de la configuration
+        {t("Sauvegarde de la configuration")}
       </h2>
       <Card>
         <CardHeader>
-          <CardTitle>Pour ne jamais reperdre la config (§9.5.10)</CardTitle>
+          <CardTitle>{t("Pour ne jamais reperdre la config (§9.5.10)")}</CardTitle>
         </CardHeader>
         <CardContent className="flex items-center gap-3">
           <Button variant="secondary" onClick={() => void doExport()}>
-            <Download className="h-4 w-4" /> Exporter (JSON)
+            <Download className="h-4 w-4" /> {t("Exporter (JSON)")}
           </Button>
           <Button variant="secondary" onClick={() => fileRef.current?.click()}>
-            <Upload className="h-4 w-4" /> Importer
+            <Upload className="h-4 w-4" /> {t("Importer")}
           </Button>
           <input
             ref={fileRef}
@@ -314,9 +320,10 @@ function ConfigSection() {
 }
 
 export function SettingsPage() {
+  const t = useT();
   return (
     <div className="space-y-6">
-      <h1 className="text-lg font-bold">GPU & Réglages</h1>
+      <h1 className="text-lg font-bold">{t("GPU & Réglages")}</h1>
       <GpuSection />
       <SettingsSection />
       <ConfigSection />

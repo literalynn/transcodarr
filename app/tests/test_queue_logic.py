@@ -98,3 +98,51 @@ def test_config_from_values_defaults_and_bad_types() -> None:
 
 def _run(coro: object) -> None:  # garde asyncio importé utile en cas d'ajout
     assert asyncio is not None
+
+
+# ---------------------------------------------------------------------------
+# Ressources : parsers purs (app vs hôte)
+# ---------------------------------------------------------------------------
+def test_parse_proc_stat_line() -> None:
+    from transcoder.core.resources import parse_proc_stat_line
+
+    busy_total = parse_proc_stat_line(
+        "cpu  100 20 50 800 30 0 10 0 0 0"
+    )
+    assert busy_total is not None
+    busy, total = busy_total
+    assert total == 1010
+    assert busy == 1010 - 800 - 30  # idle + iowait exclus
+    assert parse_proc_stat_line("cpu0 1 2 3") is None
+    assert parse_proc_stat_line("garbage") is None
+
+
+def test_parse_meminfo() -> None:
+    from transcoder.core.resources import parse_meminfo
+
+    parsed = parse_meminfo(
+        "MemTotal:       32768000 kB\nMemFree:  100 kB\nMemAvailable:   16384000 kB\n"
+    )
+    assert parsed == (32768000 * 1024, 16384000 * 1024)
+    assert parse_meminfo("rien") is None
+
+
+def test_parse_cgroup_cpu() -> None:
+    from transcoder.core.resources import parse_cgroup_cpu_usage_usec
+
+    assert (
+        parse_cgroup_cpu_usage_usec("usage_usec 123456\nuser_usec 100\n") == 123456
+    )
+    assert parse_cgroup_cpu_usage_usec("nope") is None
+
+
+async def test_sample_resources_degrades_gracefully() -> None:
+    """Sur une machine sans cgroup v2/intel_gpu_top (dev macOS), tout est
+    null mais l'appel ne lève jamais."""
+    from transcoder.core.resources import sample_resources
+
+    out = await sample_resources("/dev/dri/renderD999")
+    assert set(out.keys()) == {"cpu", "memory", "gpu"}
+    assert "app_percent" in out["cpu"]
+    assert "total_bytes" in out["memory"]
+    assert "busy_percent" in out["gpu"]

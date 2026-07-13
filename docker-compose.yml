@@ -23,6 +23,9 @@ services:
         condition: service_healthy
     # Jamais root : uid/gid de l'utilisateur propriétaire des médias
     user: "${PUID}:${PGID}"
+    # PERFMON : requis par intel_gpu_top (utilisation GPU du dashboard)
+    cap_add:
+      - PERFMON
     # GID numérique du groupe render de l'HÔTE (le nom n'existe pas ici)
     group_add:
       - "${RENDER_GID}"

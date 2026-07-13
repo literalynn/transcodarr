@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         intel-media-va-driver-non-free \
         mesa-vulkan-drivers \
         vainfo \
+        intel-gpu-tools \
         mkvtoolnix \
     && for pkg in libvpl2 libmfx-gen1.2 libmfx1 intel-opencl-icd; do \
          apt-get install -y --no-install-recommends "$pkg" \

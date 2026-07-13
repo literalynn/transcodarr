@@ -1373,6 +1373,30 @@
     }
    }
   },
+  "/api/v1/stats/resources": {
+   "get": {
+    "tags": [
+     "stats"
+    ],
+    "summary": "Resources",
+    "description": "CPU/RAM/GPU : consommation de l'app (cgroup) vs reste du système.",
+    "operationId": "resources_api_v1_stats_resources_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Resources Api V1 Stats Resources Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/stats/summary": {
    "get": {
     "tags": [
