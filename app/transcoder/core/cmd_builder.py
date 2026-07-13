@@ -234,6 +234,19 @@ def build_ffmpeg_cmd(params: BuildParams) -> list[str]:
 
     cmd += ["-map_metadata", "0", "-map_chapters", "0"]
 
+    # -map_metadata recopie les tags de statistiques mkvmerge de la piste
+    # vidéo SOURCE (BPS, NUMBER_OF_BYTES…) : périmés après réencodage, ils
+    # feraient afficher l'ancien bitrate. Purge (valeur vide = suppression) ;
+    # les vraies statistiques sont recalculées post-encode par mkvpropedit.
+    for stale_tag in (
+        "BPS", "BPS-eng",
+        "NUMBER_OF_BYTES", "NUMBER_OF_BYTES-eng",
+        "NUMBER_OF_FRAMES", "NUMBER_OF_FRAMES-eng",
+        "DURATION", "DURATION-eng",
+        "_STATISTICS_WRITING_APP", "_STATISTICS_WRITING_DATE_UTC", "_STATISTICS_TAGS",
+    ):
+        cmd += ["-metadata:s:v:0", f"{stale_tag}="]
+
     if params.container is Container.MP4:
         # MP4 : pas d'attachments, sous-titres texte convertis en mov_text
         cmd += ["-map", "-0:t", "-c:s", "mov_text", "-movflags", "+faststart"]

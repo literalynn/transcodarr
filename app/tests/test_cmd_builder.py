@@ -385,3 +385,14 @@ def test_full_matrix_builds(
     if api is GpuApi.VAAPI:
         vf = _vf(cmd)
         assert "hwupload" in vf or "hwmap" in vf
+
+
+def test_stale_statistics_tags_are_stripped() -> None:
+    """-map_metadata recopie les tags BPS/NUMBER_OF_* de la source : ils
+    doivent être purgés (sinon l'UI affiche l'ancien bitrate)."""
+    cmd = _build(_probe())
+    joined = " ".join(cmd)
+    for tag in ("BPS=", "BPS-eng=", "NUMBER_OF_BYTES=", "NUMBER_OF_FRAMES=", "DURATION="):
+        assert f"-metadata:s:v:0 {tag}" in joined
+    # Le tag anti-boucle, lui, reste intact
+    assert "TRANSCODER_TAG=jftranscoder-v1|" in joined

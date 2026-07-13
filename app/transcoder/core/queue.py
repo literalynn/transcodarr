@@ -40,6 +40,7 @@ from transcoder.core.probe import MediaProbe, ProbeError, probe_file
 from transcoder.core.replace import (
     DiskSpaceError,
     ReplaceError,
+    add_track_statistics_mkv,
     check_free_space,
     inject_hdr10_metadata_mkv,
     make_dry_run_path,
@@ -360,6 +361,17 @@ class QueueManager:
             if result.cancelled:
                 await self._finalize_cancelled(work, result.log_tail, result.exit_code)
                 return
+
+            # --- Statistiques de pistes réelles (bitrate exact dans l'UI) ------
+            if (
+                result.exit_code == 0
+                and library_snapshot["container"] is Container.MKV
+                and self.capabilities.mkvpropedit_ok
+            ):
+                self._set_phase(job_id, "calcul des statistiques de pistes")
+                await add_track_statistics_mkv(
+                    tmp_path, mkvpropedit_path=config.mkvpropedit_path
+                )
 
             # --- Injection MDCV/CLL conteneur si nécessaire (arbitrage 1) ------
             if (

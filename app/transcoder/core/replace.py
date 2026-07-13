@@ -335,6 +335,27 @@ def mkvpropedit_args(mkv_path: str, meta: Hdr10Metadata) -> list[str]:
     ]
 
 
+async def add_track_statistics_mkv(mkv_path: str, *, mkvpropedit_path: str) -> bool:
+    """Recalcule les VRAIES statistiques de pistes (BPS, octets, frames) du
+    MKV encodé : c'est ce que la sonde et l'UI liront comme bitrate."""
+    proc = await asyncio.create_subprocess_exec(
+        mkvpropedit_path,
+        mkv_path,
+        "--add-track-statistics-tags",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(
+            "mkvpropedit --add-track-statistics-tags a échoué sur %s : %s",
+            mkv_path,
+            stdout.decode("utf-8", "replace")[-200:],
+        )
+        return False
+    return True
+
+
 async def inject_hdr10_metadata_mkv(
     mkv_path: str, meta: Hdr10Metadata, *, mkvpropedit_path: str
 ) -> bool:
