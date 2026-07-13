@@ -1,0 +1,20 @@
+# Contexte de build minimal : le node_modules du CONTENEUR vient de `npm ci`
+# (stage webbuild) — celui de l'hôte ne doit JAMAIS l'écraser (bits d'exécution
+# perdus lors d'une copie inter-machines → « tsc: Permission denied »).
+.git
+.gitignore
+.venv
+venv
+data
+backups
+web/node_modules
+web/dist
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.DS_Store
+**/.DS_Store
+.env
+*.log
+.claude

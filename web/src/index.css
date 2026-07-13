@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Thème shadcn/ui — sombre par défaut, clair disponible (§7).
+   Couleurs sémantiques sobres : vert = gain, rouge = échec, ambre = ignoré. */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 224 15% 12%;
+    --card: 0 0% 99%;
+    --card-foreground: 224 15% 12%;
+    --primary: 217 91% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 224 15% 20%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 9% 45%;
+    --accent: 220 14% 92%;
+    --accent-foreground: 224 15% 15%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 71% 40%;
+    --warning: 38 92% 45%;
+    --border: 220 13% 88%;
+    --input: 220 13% 85%;
+    --ring: 217 91% 55%;
+  }
+  .dark {
+    --background: 224 20% 8%;
+    --foreground: 220 14% 88%;
+    --card: 224 18% 11%;
+    --card-foreground: 220 14% 88%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 224 20% 8%;
+    --secondary: 224 14% 16%;
+    --secondary-foreground: 220 14% 80%;
+    --muted: 224 14% 15%;
+    --muted-foreground: 220 9% 55%;
+    --accent: 224 14% 18%;
+    --accent-foreground: 220 14% 88%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 65% 48%;
+    --warning: 38 92% 55%;
+    --border: 224 14% 18%;
+    --input: 224 14% 22%;
+    --ring: 217 91% 60%;
+  }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "tnum";
+  }
+}
+
+/* Scrollbars discrètes pour les visionneuses de logs */
+.log-viewer::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.log-viewer::-webkit-scrollbar-thumb {
+  @apply rounded bg-muted-foreground/30;
+}

@@ -1,0 +1,60 @@
+# Un seul fichier, deux services (§9.2). Tout ce qui varie passe par .env.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # bind-mount (pas de volume nommé) : tout l'état sauvegardable au tar (§9.1)
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    # Jamais root : uid/gid de l'utilisateur propriétaire des médias
+    user: "${PUID}:${PGID}"
+    # GID numérique du groupe render de l'HÔTE (le nom n'existe pas ici)
+    group_add:
+      - "${RENDER_GID}"
+    devices:
+      - "${DRI_DEVICE}:${DRI_DEVICE}"
+    ports:
+      - "${HTTP_PORT}:8080"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      HTTP_PORT: 8080
+      MEDIA_ROOT: ${MEDIA_ROOT}
+      SANDBOX_ROOT: ${SANDBOX_ROOT}
+      DATA_DIR: /data
+      DRY_RUN: ${DRY_RUN}
+      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS}
+      DRI_DEVICE: ${DRI_DEVICE}
+      RENDER_GID: ${RENDER_GID}
+      PUID: ${PUID}
+      PGID: ${PGID}
+    volumes:
+      # MÊME chemin absolu hôte et conteneur : les chemins en base sont
+      # valides des deux côtés, ajout de bibliothèque sans toucher ce fichier
+      - ${MEDIA_ROOT}:${MEDIA_ROOT}
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
