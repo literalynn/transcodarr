@@ -684,6 +684,28 @@
     }
    }
   },
+  "/api/v1/queue/recover": {
+   "post": {
+    "tags": [
+     "queue"
+    ],
+    "summary": "Recover Stale",
+    "description": "Relance les jobs figés en running/validating/replacing qui ne sont\npas réellement actifs dans ce process (arrêt brutal, incohérence).",
+    "operationId": "recover_stale_api_v1_queue_recover_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ActionResult"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/queue/reorder": {
    "post": {
     "tags": [
@@ -1156,6 +1178,56 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/MediaFilePage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/files/requeue-dry-run": {
+   "post": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Requeue Dry Run",
+    "description": "Re-queue tous les fichiers traités uniquement en dry-run (§9.4) :\nà utiliser après passage en réel, sans attendre le prochain scan.",
+    "operationId": "requeue_dry_run_api_v1_files_requeue_dry_run_post",
+    "parameters": [
+     {
+      "name": "library_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Library Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ActionResult"
         }
        }
       }
@@ -1773,6 +1845,17 @@
      "job_id": {
       "type": "integer",
       "title": "Job Id"
+     },
+     "phase": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phase"
      },
      "media_id": {
       "type": "integer",

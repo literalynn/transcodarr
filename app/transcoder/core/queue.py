@@ -140,6 +140,15 @@ class QueueManager:
         event.set()
         return True
 
+    def _set_phase(self, job_id: int, phase: str) -> None:
+        """Phase lisible du job (encodage / validation x/9 / remplacement) :
+        mise à jour du bandeau actif, événement WS et ligne de log."""
+        info = self._active_jobs.get(job_id)
+        if info is not None:
+            info["phase"] = phase
+        logger.info("Job %d : %s", job_id, phase)
+        event_bus.publish_queue({"type": "phase", "job_id": job_id, "phase": phase})
+
     def active_jobs(self) -> list[dict[str, Any]]:
         return [dict(v) for v in self._active_jobs.values()]
 
@@ -261,16 +270,41 @@ class QueueManager:
                 "dry_run": dry_run,
                 "started_at": _now().isoformat(),
                 "percent": 0.0,
+                "phase": "encodage",
             }
+            logger.info(
+                "Job %d : DÉMARRAGE %s — %s → %s %dk (%s, worker %s#%d%s)",
+                job_id,
+                os.path.basename(probe.path),
+                probe.video_codec or "?",
+                rule.codec.value,
+                rule.target_kbps,
+                plan.action.value,
+                gpu_cap.drm_node,
+                slot,
+                ", DRY-RUN" if dry_run else "",
+            )
             event_bus.publish_queue(
                 {"type": "job_started", "job": dict(self._active_jobs[job_id])}
             )
 
             # --- Encodage ------------------------------------------------------
             last_snapshot = 0.0
+            last_progress_log = 0.0
 
             async def on_progress(u: ProgressUpdate) -> None:
-                nonlocal last_snapshot
+                nonlocal last_snapshot, last_progress_log
+                now_mono = time.monotonic()
+                if now_mono - last_progress_log >= 30.0:
+                    last_progress_log = now_mono
+                    logger.info(
+                        "Job %d : encodage %.1f%% (fps %.0f, x%.2f, ETA %s)",
+                        job_id,
+                        u.percent or 0.0,
+                        u.fps or 0.0,
+                        u.speed or 0.0,
+                        f"{int((u.eta_s or 0) // 60)}m{int((u.eta_s or 0) % 60):02d}s",
+                    )
                 info = self._active_jobs.get(job_id)
                 if info is not None:
                     info.update(
@@ -316,6 +350,13 @@ class QueueManager:
                 cancel_event=cancel_event,
             )
 
+            logger.info(
+                "Job %d : encodage terminé (code %d, fps moyen %s, vitesse x%s)",
+                job_id,
+                result.exit_code,
+                result.avg_fps,
+                result.avg_speed,
+            )
             if result.cancelled:
                 await self._finalize_cancelled(work, result.log_tail, result.exit_code)
                 return
@@ -327,6 +368,7 @@ class QueueManager:
                 and library_snapshot["container"] is Container.MKV
                 and self.capabilities.mkvpropedit_ok
             ):
+                self._set_phase(job_id, "injection des métadonnées HDR10")
                 meta = await resolve_output_hdr10_metadata(
                     probe,
                     ffmpeg_path=config.ffmpeg_path,
@@ -339,7 +381,34 @@ class QueueManager:
 
             # --- Validation (§5.5) ----------------------------------------------
             await self._set_job_state(job_id, JobState.VALIDATING)
+            self._set_phase(job_id, "validation 1/9")
             event_bus.publish_queue({"type": "job_validating", "job_id": job_id})
+
+            async def on_check(label: str) -> None:
+                self._set_phase(job_id, f"validation {label}")
+
+            last_decode_log = 0.0
+
+            async def on_decode_progress(percent: float) -> None:
+                nonlocal last_decode_log
+                info = self._active_jobs.get(job_id)
+                if info is not None:
+                    info["percent"] = percent
+                event_bus.publish_queue(
+                    {
+                        "type": "progress",
+                        "job_id": job_id,
+                        "percent": percent,
+                        "fps": None,
+                        "speed": None,
+                        "eta_s": None,
+                    }
+                )
+                now_mono = time.monotonic()
+                if now_mono - last_decode_log >= 30.0:
+                    last_decode_log = now_mono
+                    logger.info("Job %d : validation — décodage d'intégrité %.0f%%", job_id, percent)
+
             src_size = os.path.getsize(probe.path) if os.path.exists(probe.path) else 0
             report = await validate_output(
                 ffmpeg_path=config.ffmpeg_path,
@@ -355,8 +424,11 @@ class QueueManager:
                 dv_ssim_threshold=config.dv_ssim_threshold,
                 dv_chroma_delta_max=config.dv_chroma_delta_max,
                 tmp_dir=config.tmp_dir,
+                on_check=on_check,
+                on_decode_progress=on_decode_progress,
             )
 
+            self._set_phase(job_id, "finalisation")
             await self._finalize(
                 work=work,
                 probe=probe,
@@ -664,6 +736,12 @@ class QueueManager:
 
             outcome: ValidationOutcome = report.outcome
 
+            logger.info(
+                "Job %d : validation → %s (gain %.1f%%)",
+                job.id,
+                outcome.value,
+                report.gain_percent or 0.0,
+            )
             if outcome is ValidationOutcome.NO_GAIN:
                 # §5.5.7 : original conservé, fichier marqué traité
                 with contextlib.suppress(OSError):
@@ -707,6 +785,12 @@ class QueueManager:
 
             if dry_run:
                 # §9.4 : sortie conservée dans dry_run_out_dir, AUCUN remplacement
+                logger.info(
+                    "Job %d : SUCCÈS DRY-RUN — sortie conservée dans %s (gain %.1f%%)",
+                    job.id,
+                    tmp_path,
+                    report.gain_percent or 0.0,
+                )
                 job.state = JobState.SUCCESS
                 job.dst_path = tmp_path
                 mf.status = MediaStatus.DONE
@@ -725,6 +809,7 @@ class QueueManager:
                 return
 
             # Remplacement atomique (§5.6) — après les 9 validations UNIQUEMENT
+            self._set_phase(job.id, "remplacement atomique")
             await self._set_job_state_obj(job, JobState.REPLACING)
             try:
                 replace_result = await asyncio.to_thread(
@@ -749,6 +834,13 @@ class QueueManager:
             job.state = JobState.SUCCESS
             job.dst_path = replace_result.final_path
             job.trashed_path = replace_result.trashed_path
+            logger.info(
+                "Job %d : SUCCÈS — %s remplacé (gain %s, original en corbeille : %s)",
+                job.id,
+                os.path.basename(replace_result.final_path),
+                f"{report.gain_percent:.1f}%" if report.gain_percent is not None else "?",
+                replace_result.trashed_path,
+            )
 
             if replace_result.extension_changed:
                 logger.info(
@@ -786,6 +878,70 @@ class QueueManager:
     @staticmethod
     async def _set_job_state_obj(job: Job, state: JobState) -> None:
         job.state = state
+
+
+async def recover_stale_jobs(session: AsyncSession, active_job_ids: set[int]) -> int:
+    """Relance les jobs figés en running/validating/replacing qui ne sont
+    PAS réellement en cours dans ce process (restes d'un arrêt brutal dont
+    la reprise au boot n'a pas suffi, ou état incohérent). Déclenché par
+    POST /queue/recover — ne touche jamais un job actif."""
+    stale_states = (JobState.RUNNING, JobState.VALIDATING, JobState.REPLACING)
+    stale_jobs = (
+        (await session.execute(select(Job).where(Job.state.in_(stale_states))))
+        .scalars()
+        .all()
+    )
+    recovered = 0
+    for job in stale_jobs:
+        if job.id in active_job_ids:
+            continue
+        job.state = JobState.QUEUED
+        job.worker_slot = None
+        mf = await session.get(MediaFile, job.media_file_id)
+        if mf is not None and mf.status in (MediaStatus.PROCESSING, MediaStatus.FAILED):
+            mf.status = MediaStatus.QUEUED
+            mf.next_attempt_at = None
+            mf.last_error = None
+        recovered += 1
+        logger.info("Job %d : figé en %s → remis en queue", job.id, job.state.value)
+    return recovered
+
+
+async def requeue_dry_run_files(session: AsyncSession, library_id: int | None = None) -> int:
+    """Re-queue les fichiers marqués done dont le DERNIER job réussi était
+    un dry-run : après passage en réel, permet de relancer sans attendre le
+    scan (le tag conteneur est absent de l'original de toute façon)."""
+    stmt = select(MediaFile).where(MediaFile.status == MediaStatus.DONE)
+    if library_id is not None:
+        stmt = stmt.where(MediaFile.library_id == library_id)
+    candidates = (await session.execute(stmt)).scalars().all()
+    requeued = 0
+    for mf in candidates:
+        last_job = (
+            (
+                await session.execute(
+                    select(Job)
+                    .where(Job.media_file_id == mf.id, Job.state == JobState.SUCCESS)
+                    .order_by(Job.id.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if last_job is None or not last_job.dry_run:
+            continue
+        mf.status = MediaStatus.QUEUED
+        mf.applied_rule_hash = None
+        mf.retry_count = 0
+        mf.next_attempt_at = None
+        requeued += 1
+    logger.info(
+        "Re-queue dry-run%s : %d fichier(s)",
+        f" (bibliothèque {library_id})" if library_id else "",
+        requeued,
+    )
+    return requeued
 
 
 # ---------------------------------------------------------------------------

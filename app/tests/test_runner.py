@@ -62,8 +62,12 @@ def test_parse_progress_na_values() -> None:
 # Exécution avec faux ffmpeg (script Python)
 # ---------------------------------------------------------------------------
 def _fake_ffmpeg(tmp_path: Path, body: str) -> str:
-    script = tmp_path / "fake_ffmpeg.py"
-    script.write_text(f"#!{sys.executable}\nimport sys, time\n{body}\n", encoding="utf-8")
+    # Wrapper /bin/sh : un shebang direct vers sys.executable casserait si le
+    # chemin de l'interpréteur contient un espace (repo sous iCloud Drive)
+    impl = tmp_path / "fake_ffmpeg_impl.py"
+    impl.write_text(f"import sys, time\n{body}\n", encoding="utf-8")
+    script = tmp_path / "fake_ffmpeg"
+    script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n', encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
 

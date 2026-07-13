@@ -203,3 +203,33 @@ par `npm ci` dans le stage webbuild.
 `data/`, `.venv`, caches Python, `.env`, `.git`. Effet vérifié : contexte de
 build réduit à ~5 Kio, stage webbuild rebuildé de zéro → `tsc --noEmit` +
 `vite build` verts, image complète OK.
+
+## 2026-07-14 — Observabilité des jobs + relance des jobs figés/dry-run
+
+Retours d'exploitation réelle : impossible de savoir où en est un job
+(« freeze à 0 % pendant tout l'encodage », validation muette pendant de
+longues minutes — le décodage d'intégrité CPU d'un gros fichier dure
+aussi longtemps que l'encodage), et pas de moyen de relancer les jobs
+figés par un arrêt brutal ni de re-traiter les fichiers finis en dry-run.
+
+- Logs docker détaillés : démarrage de job (fichier, codec→codec, action,
+  worker, dry-run), progression d'encodage toutes les 30 s (%, fps, x,
+  ETA), chaque contrôle de validation annoncé (« validation 5/9 intégrité »),
+  progression du décodage d'intégrité en %, issue finale (succès/gain/
+  corbeille) ;
+- Phase visible dans l'UI : champ `phase` sur les jobs actifs (encodage /
+  injection HDR / validation x/9 / remplacement), événement WS `phase`,
+  affiché sur les cartes du Dashboard — la barre avance aussi pendant la
+  validation (progression du décodage) ;
+- `POST /queue/recover` : remet en queue les jobs figés en running/
+  validating/replacing qui ne tournent pas réellement dans le process
+  (bouton « Relancer les jobs bloqués », onglet Queue) ;
+- `POST /files/requeue-dry-run[?library_id=]` : re-queue les fichiers done
+  dont le dernier job réussi était un dry-run (bouton « Re-queuer les
+  dry-run ») — sans attendre le prochain scan.
+
+Note environnement : le repo vit désormais sous iCloud Drive (« Mobile
+Documents » contient un espace) → les faux binaires des tests utilisent
+un wrapper /bin/sh au lieu d'un shebang python (les shebangs ne supportent
+pas les espaces). Historique git réinitialisé après un déplacement de
+dossier sans fichiers cachés ; remote : github.com/literalynn/transcodarr.

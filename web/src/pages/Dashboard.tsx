@@ -57,6 +57,11 @@ function ActiveJobCard({ job, onLogs }: { job: ActiveJob; onLogs: () => void }) 
           <span>{job.speed ? `${job.speed.toFixed(2)}x` : "—"}</span>
           <span>ETA {formatDuration(job.eta_s)}</span>
         </div>
+        {job.phase && (
+          <div className="truncate text-xs text-primary" title={job.phase}>
+            {job.phase}
+          </div>
+        )}
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="truncate">{job.gpu} · slot {job.slot}</span>
           <div className="flex gap-1">

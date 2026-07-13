@@ -39,6 +39,8 @@ EXPECTED_ENDPOINTS: list[tuple[str, str]] = [
     ("post", "/api/v1/queue/pause"),
     ("post", "/api/v1/queue/resume"),
     ("post", "/api/v1/queue/reorder"),
+    ("post", "/api/v1/queue/recover"),
+    ("post", "/api/v1/files/requeue-dry-run"),
     ("get", "/api/v1/jobs"),
     ("get", "/api/v1/jobs/{job_id}"),
     ("get", "/api/v1/jobs/{job_id}/log"),

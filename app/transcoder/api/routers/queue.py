@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder.api import schemas
 from transcoder.api.deps import get_queue_manager
-from transcoder.core.queue import QueueManager
+from transcoder.core.queue import QueueManager, recover_stale_jobs
 from transcoder.db import get_db
 from transcoder.enums import MediaStatus
 from transcoder.models import AppSetting, Library, MediaFile
@@ -69,6 +69,18 @@ async def resume(
     library_id: int | None = None, session: AsyncSession = Depends(get_db)
 ) -> schemas.ActionResult:
     return await _set_paused(session, False, library_id)
+
+
+@router.post("/recover", response_model=schemas.ActionResult)
+async def recover_stale(
+    session: AsyncSession = Depends(get_db),
+    qm: QueueManager = Depends(get_queue_manager),
+) -> schemas.ActionResult:
+    """Relance les jobs figés en running/validating/replacing qui ne sont
+    pas réellement actifs dans ce process (arrêt brutal, incohérence)."""
+    active_ids = {j["job_id"] for j in qm.active_jobs()}
+    count = await recover_stale_jobs(session, active_ids)
+    return schemas.ActionResult(ok=True, detail=f"{count} job(s) figé(s) remis en queue")
 
 
 @router.post("/reorder", response_model=schemas.ActionResult)

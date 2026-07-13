@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder.api import schemas
+from transcoder.core.queue import requeue_dry_run_files
 from transcoder.db import get_db
 from transcoder.enums import MediaStatus
 from transcoder.models import MediaFile
@@ -56,6 +57,16 @@ async def list_files(
         items=[schemas.MediaFileOut.model_validate(r) for r in rows],
         meta=schemas.PageMeta(total=total, limit=limit, offset=offset),
     )
+
+
+@router.post("/requeue-dry-run", response_model=schemas.ActionResult)
+async def requeue_dry_run(
+    library_id: int | None = None, session: AsyncSession = Depends(get_db)
+) -> schemas.ActionResult:
+    """Re-queue tous les fichiers traités uniquement en dry-run (§9.4) :
+    à utiliser après passage en réel, sans attendre le prochain scan."""
+    count = await requeue_dry_run_files(session, library_id)
+    return schemas.ActionResult(ok=True, detail=f"{count} fichier(s) dry-run remis en queue")
 
 
 async def _get_file(session: AsyncSession, file_id: int) -> MediaFile:

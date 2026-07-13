@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -24,6 +26,14 @@ from typing import Any
 from transcoder.core.dovi import TreatmentAction, TreatmentPlan
 from transcoder.core.probe import MediaProbe, ProbeError, probe_file
 from transcoder.enums import Codec, HdrFormat
+
+logger = logging.getLogger(__name__)
+
+# Callbacks de suivi : nom du contrôle en cours, et progression 0-100 du
+# décodage d'intégrité (contrôle 5, le plus long) — consommés par la queue
+# pour les logs, le WebSocket et l'UI.
+CheckCallback = Callable[[str], Awaitable[None]]
+DecodeProgressCallback = Callable[[float], Awaitable[None]]
 
 
 class ValidationOutcome(str, Enum):
@@ -235,8 +245,67 @@ async def _run_tool(args: list[str], timeout: float = 3600.0) -> tuple[int, str]
     )
 
 
+async def _run_ffmpeg_with_progress(
+    args: list[str],
+    *,
+    duration_s: float | None,
+    on_progress: DecodeProgressCallback | None,
+    timeout: float = 7200.0,
+) -> tuple[int, str]:
+    """FFmpeg avec parse de `-progress pipe:1` : (code, stderr). Permet de
+    suivre le décodage d'intégrité au lieu d'un silence de plusieurs minutes."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        return -1, str(exc)
+    assert proc.stdout is not None and proc.stderr is not None
+
+    async def consume_progress() -> None:
+        assert proc.stdout is not None
+        last_emitted = -10.0
+        async for raw in proc.stdout:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("out_time_us=") or duration_s is None or duration_s <= 0:
+                continue
+            try:
+                percent = min(100.0, int(line.split("=", 1)[1]) / 1_000_000.0 / duration_s * 100.0)
+            except ValueError:
+                continue
+            if percent - last_emitted >= 5.0 and on_progress is not None:
+                last_emitted = percent
+                await on_progress(percent)
+
+    async def consume_stderr() -> bytes:
+        assert proc.stderr is not None
+        return await proc.stderr.read()
+
+    try:
+        progress_task = asyncio.create_task(consume_progress())
+        stderr_task = asyncio.create_task(consume_stderr())
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+        await progress_task
+        stderr = await stderr_task
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return -2, "timeout"
+    return proc.returncode if proc.returncode is not None else -1, stderr.decode(
+        "utf-8", "replace"
+    )
+
+
 async def _check_decode_integrity(
-    ffmpeg_path: str, dst_path: str, *, mode: str, duration_s: float | None
+    ffmpeg_path: str,
+    dst_path: str,
+    *,
+    mode: str,
+    duration_s: float | None,
+    on_progress: DecodeProgressCallback | None = None,
 ) -> CheckResult:
     """Contrôle 5 : décodage CPU complet (ou 3 segments de 30 s si `sample`)."""
     if mode == "sample" and duration_s and duration_s > 120:
@@ -257,19 +326,22 @@ async def _check_decode_integrity(
                 )
         return CheckResult("5_integrity", True, "3 segments de 30 s décodés sans erreur")
 
-    code, out = await _run_tool(
+    code, err = await _run_ffmpeg_with_progress(
         [
             ffmpeg_path, "-hide_banner", "-nostdin",
             "-v", "error", "-xerror",
+            "-progress", "pipe:1", "-nostats",
             "-i", dst_path,
             "-f", "null", "-",
-        ]
+        ],
+        duration_s=duration_s,
+        on_progress=on_progress,
     )
-    ok = code == 0 and not out.strip()
+    ok = code == 0 and not err.strip()
     return CheckResult(
         "5_integrity",
         ok,
-        "décodage intégral sans erreur" if ok else f"erreurs : {out.strip()[:300]}",
+        "décodage intégral sans erreur" if ok else f"erreurs : {err.strip()[:300]}",
     )
 
 
@@ -409,22 +481,37 @@ async def validate_output(
     dv_ssim_threshold: float,
     dv_chroma_delta_max: float,
     tmp_dir: str,
+    on_check: CheckCallback | None = None,
+    on_decode_progress: DecodeProgressCallback | None = None,
 ) -> ValidationReport:
-    """Exécute les 9 contrôles §5.5 dans l'ordre, arrêt au premier échec."""
+    """Exécute les 9 contrôles §5.5 dans l'ordre, arrêt au premier échec.
+
+    `on_check` est appelé au DÉBUT de chaque contrôle (affichage UI/logs),
+    `on_decode_progress` pendant le décodage d'intégrité (contrôle 5)."""
     report = ValidationReport(outcome=ValidationOutcome.FAILED)
+
+    async def _step(label: str) -> None:
+        logger.info("Validation %s : %s", os.path.basename(dst_path), label)
+        if on_check is not None:
+            await on_check(label)
 
     def _fail(check: CheckResult) -> ValidationReport:
         report.checks.append(check)
         report.outcome = ValidationOutcome.FAILED
+        logger.warning(
+            "Validation %s : ÉCHEC %s — %s", os.path.basename(dst_path), check.name, check.detail
+        )
         return report
 
     # 1 — exit code
+    await _step("1/9 code de sortie ffmpeg")
     c1 = check_exit_code(exit_code)
     if not c1.ok:
         return _fail(c1)
     report.checks.append(c1)
 
     # 2 — sortie présente et non vide
+    await _step("2/9 présence et taille de la sortie")
     try:
         dst_size = os.path.getsize(dst_path)
     except OSError:
@@ -435,6 +522,7 @@ async def validate_output(
     report.checks.append(c2)
 
     # 3 — sonde de la sortie + codec cible
+    await _step("3/9 sonde ffprobe + codec cible")
     try:
         dst_probe = await probe_file(dst_path, ffprobe_path)
     except ProbeError as exc:
@@ -446,26 +534,34 @@ async def validate_output(
     report.checks.append(c3)
 
     # 4 — durée
+    await _step("4/9 durée source/sortie")
     c4 = check_duration(src_probe.duration_s, dst_probe.duration_s)
     if not c4.ok:
         return _fail(c4)
     report.checks.append(c4)
 
-    # 5 — intégrité (décodage CPU)
+    # 5 — intégrité (décodage CPU — le contrôle le plus long, suivi en %)
+    await _step("5/9 intégrité (décodage complet)")
     c5 = await _check_decode_integrity(
-        ffmpeg_path, dst_path, mode=validation_decode, duration_s=dst_probe.duration_s
+        ffmpeg_path,
+        dst_path,
+        mode=validation_decode,
+        duration_s=dst_probe.duration_s,
+        on_progress=on_decode_progress,
     )
     if not c5.ok:
         return _fail(c5)
     report.checks.append(c5)
 
     # 6 — complétude des flux
+    await _step("6/9 complétude des pistes")
     c6 = check_stream_counts(src_probe, dst_probe)
     if not c6.ok:
         return _fail(c6)
     report.checks.append(c6)
 
     # 7 — gain (pas un échec : skipped_no_gain, original conservé)
+    await _step("7/9 gain de taille")
     c7, gain, no_gain = check_gain(src_size_bytes, dst_size, min_gain_percent)
     report.checks.append(c7)
     report.gain_percent = gain
@@ -475,6 +571,7 @@ async def validate_output(
 
     # 8 — colorimétrie (si la sortie doit être HDR) + absence de DOVI (toujours)
     if plan.output_hdr_format in (HdrFormat.HDR10, HdrFormat.HLG):
+        await _step("8/9 colorimétrie HDR")
         c8 = check_colorimetry(dst_probe, plan.output_hdr_format)
         if not c8.ok:
             return _fail(c8)
@@ -486,6 +583,7 @@ async def validate_output(
 
     # 9 — anti-vert/violet (obligatoire si la source était Dolby Vision)
     if plan.source_is_dv:
+        await _step("9/9 contrôle couleurs DV (anti-vert/violet)")
         c9 = await _check_dv_colors(
             ffmpeg_path=ffmpeg_path,
             src_path=src_probe.path,
@@ -501,4 +599,10 @@ async def validate_output(
         report.checks.append(c9)
 
     report.outcome = ValidationOutcome.PASSED
+    logger.info(
+        "Validation %s : les %d contrôles sont PASSÉS (gain %.1f%%)",
+        os.path.basename(dst_path),
+        len(report.checks),
+        report.gain_percent or 0.0,
+    )
     return report

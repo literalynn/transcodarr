@@ -239,6 +239,7 @@ class JobPage(BaseModel):
 
 class ActiveJob(BaseModel):
     job_id: int
+    phase: str | None = None
     media_id: int
     library_id: int
     path: str

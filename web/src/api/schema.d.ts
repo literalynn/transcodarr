@@ -222,6 +222,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/queue/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recover Stale
+         * @description Relance les jobs figés en running/validating/replacing qui ne sont
+         *     pas réellement actifs dans ce process (arrêt brutal, incohérence).
+         */
+        post: operations["recover_stale_api_v1_queue_recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queue/reorder": {
         parameters: {
             query?: never;
@@ -338,6 +359,27 @@ export interface paths {
         get: operations["list_files_api_v1_files_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/requeue-dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue Dry Run
+         * @description Re-queue tous les fichiers traités uniquement en dry-run (§9.4) :
+         *     à utiliser après passage en réel, sans attendre le prochain scan.
+         */
+        post: operations["requeue_dry_run_api_v1_files_requeue_dry_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -657,6 +699,8 @@ export interface components {
         ActiveJob: {
             /** Job Id */
             job_id: number;
+            /** Phase */
+            phase?: string | null;
             /** Media Id */
             media_id: number;
             /** Library Id */
@@ -1739,6 +1783,26 @@ export interface operations {
             };
         };
     };
+    recover_stale_api_v1_queue_recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionResult"];
+                };
+            };
+        };
+    };
     reorder_api_v1_queue_reorder_post: {
         parameters: {
             query?: never;
@@ -1959,6 +2023,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MediaFilePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    requeue_dry_run_api_v1_files_requeue_dry_run_post: {
+        parameters: {
+            query?: {
+                library_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionResult"];
                 };
             };
             /** @description Validation Error */

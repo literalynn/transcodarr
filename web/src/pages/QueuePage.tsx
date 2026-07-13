@@ -1,12 +1,13 @@
 /** Queue (§7.2) : 3 onglets, table virtualisée, drag pour réordonner. */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowUpToLine, GripVertical, Search } from "lucide-react";
+import { ArrowUpToLine, GripVertical, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { Job, MediaFile } from "@/api/client";
 import {
   useFileAction,
   useFiles,
+  useInvalidate,
   useJobAction,
   useJobs,
   useReorderQueue,
@@ -219,10 +220,41 @@ function FinishedTab({ search }: { search: string }) {
 
 export function QueuePage() {
   const [search, setSearch] = useState("");
+  const [actionResult, setActionResult] = useState<string | null>(null);
+  const invalidate = useInvalidate();
+
+  const runAction = async (path: string) => {
+    const resp = await fetch(path, { method: "POST" });
+    const data = (await resp.json()) as { detail?: string };
+    setActionResult(data.detail ?? "fait");
+    invalidate("files", "queue", "jobs");
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-lg font-bold">Queue</h1>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            title="Remet en queue les jobs figés en running/validating qui ne tournent plus (après un arrêt brutal)"
+            onClick={() => void runAction("/api/v1/queue/recover")}
+          >
+            <RotateCcw className="h-3.5 w-3.5" /> Relancer les jobs bloqués
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            title="Re-queue les fichiers traités uniquement en dry-run (après passage en réel)"
+            onClick={() => void runAction("/api/v1/files/requeue-dry-run")}
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Re-queuer les dry-run
+          </Button>
+          {actionResult && (
+            <span className="text-xs text-muted-foreground">{actionResult}</span>
+          )}
+        </div>
         <div className="relative w-72">
           <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
           <Input

@@ -58,6 +58,14 @@ export function useQueueSocket(): { active: ActiveJob[]; connected: boolean } {
             }
             break;
           }
+          case "phase": {
+            const id = event.job_id as number;
+            const existing = map.get(id);
+            if (existing) {
+              map.set(id, { ...existing, phase: (event.phase as string) ?? null });
+            }
+            break;
+          }
           case "job_finished":
           case "job_cancelled": {
             map.delete(event.job_id as number);

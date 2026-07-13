@@ -35,8 +35,11 @@ def test_parse_libplacebo_help() -> None:
 
 
 def _fake_bin(tmp_path: Path, name: str, body: str) -> str:
+    # Wrapper /bin/sh : shebang insensible aux espaces du chemin python
+    impl = tmp_path / f"{name}_impl.py"
+    impl.write_text(f"import sys\n{body}\n", encoding="utf-8")
     script = tmp_path / name
-    script.write_text(f"#!{sys.executable}\nimport sys\n{body}\n", encoding="utf-8")
+    script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n', encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
 
