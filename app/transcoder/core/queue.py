@@ -898,6 +898,37 @@ class QueueManager:
                 )
                 return
 
+            # Garde anti-upgrade : si Radarr/Sonarr a REMPLACÉ la source
+            # pendant l'encodage (fichier upgradé, même nom), remplacer
+            # écraserait la nouvelle version par l'encodage de l'ancienne.
+            # On vérifie que la source est identique à ce qui a été sondé.
+            try:
+                current = os.stat(mf.path)
+                src_changed = current.st_size != job.src_size_bytes or (
+                    job.src_mtime is not None
+                    and abs(current.st_mtime - job.src_mtime.timestamp()) >= 1.0
+                )
+            except OSError:
+                src_changed = True  # source disparue : ne surtout pas écrire
+            if src_changed:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+                reason = (
+                    "source modifiée pendant l'encodage (upgrade *arr probable) : "
+                    "remplacement annulé, le nouveau fichier sera re-traité au scan"
+                )
+                logger.warning("Job %d : %s", job.id, reason)
+                job.state = JobState.CANCELLED
+                job.error_message = reason
+                job.dst_path = None
+                # pending : le prochain scan re-sonde le NOUVEAU fichier et
+                # décide (pas de retry compté, ce n'est pas un échec)
+                mf.status = MediaStatus.PENDING
+                event_bus.publish_queue(
+                    {"type": "job_cancelled", "job_id": work.job_id, "reason": reason}
+                )
+                return
+
             # Remplacement atomique (§5.6) — après les 9 validations UNIQUEMENT
             self._set_phase(job.id, "remplacement atomique")
             await self._set_job_state_obj(job, JobState.REPLACING)
