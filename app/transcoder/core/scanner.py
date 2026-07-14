@@ -98,9 +98,11 @@ def decide_status(facts: FileFacts) -> Decision:
     if facts.existing_status is MediaStatus.IGNORED:
         return Decision(MediaStatus.IGNORED, "ignoré par l'utilisateur")
 
-    # En cours de traitement : le scan ne s'en mêle pas
-    if facts.existing_status in (MediaStatus.QUEUED, MediaStatus.PROCESSING):
-        return Decision(facts.existing_status, "déjà en file/en cours")
+    # En cours de traitement : le scan ne s'en mêle pas. Les fichiers
+    # simplement EN FILE sont en revanche re-décidés : un changement de
+    # filtre de date ou de politique doit pouvoir les retirer de la queue.
+    if facts.existing_status is MediaStatus.PROCESSING:
+        return Decision(facts.existing_status, "en cours de traitement")
 
     if not facts.date_ok:
         return Decision(MediaStatus.IGNORED, "antérieur au filtre de date de la bibliothèque")
@@ -197,15 +199,19 @@ def file_matches_filters(
 def added_date(
     st: os.stat_result, jellyfin_date: datetime.datetime | None
 ) -> datetime.datetime:
-    """Date d'ajout : Jellyfin DateCreated > btime (statx) > max(mtime, ctime)."""
+    """Date d'ajout : Jellyfin DateCreated > btime > mtime.
+
+    Le ctime est volontairement ÉCARTÉ du fallback : il est mis à jour par
+    tout chown/chmod/renommage (opérations *arr, corrections de droits…),
+    ce qui faisait paraître TOUTE la bibliothèque « ajoutée aujourd'hui »
+    et vidait le filtre de date de son sens. mtime = date du média, c'est
+    aussi ce que Jellyfin utilise pour « Récemment ajouté »."""
     if jellyfin_date is not None:
         return jellyfin_date
     btime = getattr(st, "st_birthtime", None)
     if isinstance(btime, float) and btime > 0:
         return datetime.datetime.fromtimestamp(btime, tz=datetime.timezone.utc)
-    return datetime.datetime.fromtimestamp(
-        max(st.st_mtime, st.st_ctime), tz=datetime.timezone.utc
-    )
+    return datetime.datetime.fromtimestamp(st.st_mtime, tz=datetime.timezone.utc)
 
 
 def _walk_media_files(root: str) -> list[str]:

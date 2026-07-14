@@ -93,10 +93,15 @@ def test_user_ignored_never_touched() -> None:
     assert d.status is MediaStatus.IGNORED
 
 
-def test_in_flight_states_untouched() -> None:
-    for status in (MediaStatus.QUEUED, MediaStatus.PROCESSING):
-        d = decide_status(_facts(existing_status=status))
-        assert d.status is status
+def test_processing_untouched_but_queued_reevaluated() -> None:
+    # PROCESSING : jamais touché par le scan
+    d = decide_status(_facts(existing_status=MediaStatus.PROCESSING))
+    assert d.status is MediaStatus.PROCESSING
+    # QUEUED : re-décidé — un filtre de date ajouté doit pouvoir le retirer
+    d = decide_status(_facts(existing_status=MediaStatus.QUEUED, date_ok=False))
+    assert d.status is MediaStatus.IGNORED
+    d = decide_status(_facts(existing_status=MediaStatus.QUEUED))
+    assert d.status is MediaStatus.QUEUED
 
 
 def test_no_rule_gives_failed() -> None:
@@ -189,9 +194,9 @@ def test_added_date_fallback_max_mtime_ctime(tmp_path: Path) -> None:
     f.write_bytes(b"x")
     st = os.stat(f)
     d = added_date(st, None)
-    # btime (macOS) ou max(mtime, ctime) : dans tous les cas une date récente tz-aware
+    # btime (macOS) ou mtime — JAMAIS le ctime (chown/chmod le réécrivent)
     assert d.tzinfo is not None
-    assert abs(d.timestamp() - max(st.st_mtime, st.st_ctime)) < 86400
+    assert abs(d.timestamp() - st.st_mtime) < 86400
 
 
 def test_added_date_jellyfin_override(tmp_path: Path) -> None:

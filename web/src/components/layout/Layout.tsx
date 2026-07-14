@@ -109,7 +109,7 @@ export function Layout() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar desktop */}
-      <aside className="hidden w-52 shrink-0 flex-col border-r bg-card md:flex">
+      <aside className="sticky top-0 hidden h-screen w-52 shrink-0 flex-col border-r bg-card md:flex">
         <SidebarContent />
       </aside>
 

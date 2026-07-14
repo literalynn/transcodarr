@@ -24,8 +24,38 @@ logger = logging.getLogger(__name__)
 
 _PROC_STAT = "/proc/stat"
 _PROC_MEMINFO = "/proc/meminfo"
-_CGROUP_CPU = "/sys/fs/cgroup/cpu.stat"
-_CGROUP_MEM = "/sys/fs/cgroup/memory.current"
+
+
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _cgroup_base() -> str:
+    """Répertoire cgroup v2 du PROCESSUS (suivi de /proc/self/cgroup).
+
+    En namespace cgroup privé (défaut docker/cgroup v2), la racine
+    /sys/fs/cgroup est déjà celle du conteneur. En cgroupns=host, elle
+    est celle de l'HÔTE entier : memory.current y vaudrait toute la RAM
+    du système et la séparation app/système serait fausse — d'où le
+    suivi du chemin réel indiqué par /proc/self/cgroup."""
+    raw = _read("/proc/self/cgroup") or ""
+    for line in raw.splitlines():
+        if line.startswith("0::"):
+            rel = line[3:].strip()
+            if rel and rel != "/":
+                candidate = "/sys/fs/cgroup" + rel
+                if os.path.exists(f"{candidate}/memory.current"):
+                    return candidate
+    return "/sys/fs/cgroup"
+
+
+_CGROUP_BASE = _cgroup_base()
+_CGROUP_CPU = f"{_CGROUP_BASE}/cpu.stat"
+_CGROUP_MEM = f"{_CGROUP_BASE}/memory.current"
 
 # Échantillons précédents pour les deltas CPU (module-level : un par process)
 _prev_host: tuple[float, int, int] | None = None  # (ts, busy_jiffies, total_jiffies)
@@ -65,14 +95,6 @@ def parse_cgroup_cpu_usage_usec(text: str) -> int | None:
             with contextlib.suppress(ValueError, IndexError):
                 return int(line.split()[1])
     return None
-
-
-def _read(path: str) -> str | None:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
-    except OSError:
-        return None
 
 
 def _host_cpu_percent() -> float | None:
@@ -125,7 +147,9 @@ async def _gpu_busy_percent(drm_node: str) -> dict[str, Any]:
                 out["freq_max_mhz"] = int(maxi.strip())
             break
     _ = card
-    # intel_gpu_top : moyenne d'occupation des moteurs (500 ms d'échantillon)
+    # intel_gpu_top : le 1er échantillon du flux -J est calculé sur un
+    # intervalle quasi nul (valeurs nulles/figées) → on échantillonne ~1,6 s
+    # et on garde le DERNIER objet JSON complet.
     try:
         proc = await asyncio.create_subprocess_exec(
             "intel_gpu_top", "-J", "-s", "500", "-d", f"drm:{drm_node}",
@@ -134,30 +158,36 @@ async def _gpu_busy_percent(drm_node: str) -> dict[str, Any]:
         )
         assert proc.stdout is not None
         buffer = b""
-        try:
-            async with asyncio.timeout(3.0):
-                # Le flux est un tableau JSON streamé : on lit jusqu'à la fin
-                # du premier objet complet
-                depth = 0
-                started = False
-                while True:
-                    chunk = await proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    buffer += chunk
-                    for i, ch in enumerate(buffer):
-                        c = chr(ch)
-                        if c == "{":
-                            depth += 1
-                            started = True
-                        elif c == "}":
-                            depth -= 1
-                            if started and depth == 0:
-                                raise StopAsyncIteration(i)
-        except StopAsyncIteration as stop:
-            end = int(str(stop)) + 1
-            start = buffer.index(b"{")
-            sample: Any = json.loads(buffer[start:end])
+        deadline = time.monotonic() + 1.8
+        while time.monotonic() < deadline:
+            try:
+                chunk = await asyncio.wait_for(proc.stdout.read(8192), timeout=0.4)
+            except asyncio.TimeoutError:
+                continue
+            if not chunk:
+                break
+            buffer += chunk
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+
+        # Flux type "[ {...}, {...}" : extraire tous les objets complets
+        text = buffer.decode("utf-8", "replace")
+        decoder = json.JSONDecoder()
+        samples: list[Any] = []
+        idx = 0
+        while True:
+            brace = text.find("{", idx)
+            if brace < 0:
+                break
+            try:
+                obj, end = decoder.raw_decode(text, brace)
+            except json.JSONDecodeError:
+                break
+            samples.append(obj)
+            idx = end
+        # dernier échantillon (le 1er est sur un intervalle quasi nul)
+        for sample in reversed(samples):
             engines = sample.get("engines", {}) if isinstance(sample, dict) else {}
             busies = [
                 float(e.get("busy", 0.0))
@@ -166,12 +196,7 @@ async def _gpu_busy_percent(drm_node: str) -> dict[str, Any]:
             ]
             if busies:
                 out["busy_percent"] = round(max(busies), 1)
-        except (asyncio.TimeoutError, json.JSONDecodeError, ValueError):
-            pass
-        finally:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.wait()
+                break
     except (OSError, FileNotFoundError):
         pass  # intel_gpu_top absent ou sans CAP_PERFMON : fréquences seules
     return out
