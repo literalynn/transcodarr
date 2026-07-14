@@ -130,6 +130,7 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
         dv_chroma_delta_max=8.0,
         validation_decode="full",
         max_retries=2,
+        early_abort_no_gain=False,  # mire courte : la projection serait bruitée
         progress_snapshot_interval_s=1,
         jellyfin_url=None,
         jellyfin_api_key=None,
