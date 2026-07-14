@@ -77,8 +77,8 @@ function ResourcesCard() {
       ? `${t("app")} ${cpu.app_percent.toFixed(0)}% · ${t("reste du système")} ${(cpu.other_percent ?? 0).toFixed(0)}%`
       : t("indisponible");
   const memDetail =
-    memory.app_bytes !== null && memory.total_bytes !== null
-      ? `${t("app")} ${formatBytes(memory.app_bytes)} / ${formatBytes(memory.total_bytes)}`
+    memory.used_bytes !== null && memory.total_bytes !== null
+      ? `${formatBytes(memory.used_bytes)} / ${formatBytes(memory.total_bytes)}`
       : t("indisponible");
   const gpuDetail =
     gpu.busy_percent !== null
@@ -101,8 +101,8 @@ function ResourcesCard() {
         />
         <SplitBar
           label="RAM"
-          appPart={memory.app_bytes !== null ? (memory.app_bytes / total) * 100 : null}
-          otherPart={memory.other_bytes !== null ? (memory.other_bytes / total) * 100 : null}
+          appPart={null}
+          otherPart={memory.used_bytes !== null ? (memory.used_bytes / total) * 100 : null}
           detail={memDetail}
         />
         <SplitBar

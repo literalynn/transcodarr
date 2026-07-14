@@ -530,7 +530,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Gain By Bucket */
+        /**
+         * Gain By Bucket
+         * @description Gain moyen par BUCKET de résolution — pas par résolution brute : un
+         *     1920x804 cinémascope est du 1080p, sinon chaque crop créerait son
+         *     propre groupe d'un seul fichier.
+         */
         get: operations["gain_by_bucket_api_v1_stats_gain_by_bucket_get"];
         put?: never;
         post?: never;
@@ -918,6 +923,13 @@ export interface components {
             workers: number;
             /** Dry Run Global */
             dry_run_global: boolean;
+            /**
+             * Version
+             * @default dev
+             */
+            version?: string;
+            /** Build Date */
+            build_date?: string | null;
         };
         /** JobDetail */
         JobDetail: {

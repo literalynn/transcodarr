@@ -1502,6 +1502,7 @@
      "stats"
     ],
     "summary": "Gain By Bucket",
+    "description": "Gain moyen par BUCKET de résolution — pas par résolution brute : un\n1920x804 cinémascope est du 1080p, sinon chaque crop créerait son\npropre groupe d'un seul fichier.",
     "operationId": "gain_by_bucket_api_v1_stats_gain_by_bucket_get",
     "responses": {
      "200": {
@@ -2396,6 +2397,22 @@
      "dry_run_global": {
       "type": "boolean",
       "title": "Dry Run Global"
+     },
+     "version": {
+      "type": "string",
+      "title": "Version",
+      "default": "dev"
+     },
+     "build_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Build Date"
      }
     },
     "type": "object",

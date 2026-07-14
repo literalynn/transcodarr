@@ -255,3 +255,23 @@ dossier sans fichiers cachés ; remote : github.com/literalynn/transcodarr.
   bascule FR/EN persistée (localStorage) dans le pied de la sidebar. Les
   phases envoyées par le backend (français) sont traduites côté client par
   table de préfixes. App renommée « Transcodarr » (UI + titre d'onglet).
+
+## 2026-07-14 — Préparation au partage public (v0.9.0)
+
+- **GPU du dashboard réécrit** : intel_gpu_top exige des capacités root
+  effectives (un process non-root ne les hérite pas, même avec cap_add) →
+  lecture des compteurs DRM `/proc/<pid>/fdinfo` (drm-engine-*) des
+  processus du conteneur. Mesure fiable, sans privilège, de l'usage GPU
+  de l'app (moteur le plus occupé, video pour QSV). RAM affichée en
+  barre simple utilisé/total (le split app/système restait confus).
+- **Version affichée** : fichier VERSION (repo) + BUILD_DATE (posé au
+  build de l'image), exposés par /health, affichés dans la sidebar à la
+  place de l'identifiant de tag interne (jftranscoder-v1 reste le tag
+  anti-boucle : NE PAS le changer, tout re-queuerait).
+- **Stats par bucket réel** : gain-by-bucket regroupe par bucket de
+  hauteur (1920x804 → 1080p) au lieu de la résolution brute — fini les
+  groupes d'un seul fichier par crop cinémascope.
+- **Anglais par défaut**, sélecteur de langue dans les réglages (le
+  bouton de la sidebar disparaît). Chaînes personnelles neutralisées.
+  Grille des bitrates scrollable sur mobile. Favicon SVG. README réécrit
+  en anglais générique pour publication GitHub.

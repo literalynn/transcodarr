@@ -241,6 +241,35 @@ async def import_config(
 # ---------------------------------------------------------------------------
 # Santé et capacités
 # ---------------------------------------------------------------------------
+def _read_build_info() -> tuple[str, str | None]:
+    """(version, date de build) : fichiers posés par le Dockerfile, avec
+    repli sur le fichier VERSION du repo en dev local."""
+    import pathlib
+
+    version = "dev"
+    build_date: str | None = None
+    candidates = [
+        pathlib.Path("/srv/app/VERSION"),
+        pathlib.Path(__file__).resolve().parents[4] / "VERSION",
+    ]
+    for candidate in candidates:
+        try:
+            version = candidate.read_text(encoding="utf-8").strip() or "dev"
+            break
+        except OSError:
+            continue
+    try:
+        build_date = (
+            pathlib.Path("/srv/app/BUILD_DATE").read_text(encoding="utf-8").strip() or None
+        )
+    except OSError:
+        build_date = None
+    return version, build_date
+
+
+_APP_VERSION, _BUILD_DATE = _read_build_info()
+
+
 @router.get("/health", response_model=schemas.HealthOut)
 async def health(
     session: AsyncSession = Depends(get_db),
@@ -257,6 +286,8 @@ async def health(
         database=db_ok,
         workers=qm.worker_count(),
         dry_run_global=config.dry_run_global,
+        version=_APP_VERSION,
+        build_date=_BUILD_DATE,
     )
 
 

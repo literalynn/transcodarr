@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { useT } from "@/lib/i18n";
+import { useI18n, useT, type Lang } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // GPU
@@ -193,6 +193,7 @@ const SETTING_FIELDS: {
 
 function SettingsSection() {
   const t = useT();
+  const { lang, setLang } = useI18n();
   const { data: settings } = useSettings();
   const patchSettings = usePatchSettings();
   const values = settings?.values ?? {};
@@ -206,6 +207,17 @@ function SettingsSection() {
       </h2>
       <Card>
         <CardContent className="grid grid-cols-1 gap-x-6 gap-y-3 p-4 md:grid-cols-2">
+          <div className="flex items-center justify-between gap-3">
+            <Label className="flex-1">{t("Langue de l'interface")}</Label>
+            <Select
+              className="w-40"
+              value={lang}
+              onChange={(e) => setLang(e.target.value as Lang)}
+            >
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+            </Select>
+          </div>
           {SETTING_FIELDS.map((field) => {
             const raw = values[field.key];
             return (
@@ -292,7 +304,7 @@ function ConfigSection() {
       </h2>
       <Card>
         <CardHeader>
-          <CardTitle>{t("Pour ne jamais reperdre la config (§9.5.10)")}</CardTitle>
+          <CardTitle>{t("Export / import de la configuration (JSON)")}</CardTitle>
         </CardHeader>
         <CardContent className="flex items-center gap-3">
           <Button variant="secondary" onClick={() => void doExport()}>

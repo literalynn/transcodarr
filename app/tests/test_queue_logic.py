@@ -146,3 +146,22 @@ async def test_sample_resources_degrades_gracefully() -> None:
     assert "app_percent" in out["cpu"]
     assert "total_bytes" in out["memory"]
     assert "busy_percent" in out["gpu"]
+
+
+def test_parse_drm_fdinfo() -> None:
+    from transcoder.core.resources import parse_drm_fdinfo
+
+    text = (
+        "pos:\t0\nflags:\t02100002\n"
+        "drm-driver:\ti915\n"
+        "drm-client-id:\t42\n"
+        "drm-engine-render:\t123456789 ns\n"
+        "drm-engine-video:\t987654321 ns\n"
+        "drm-engine-video-enhance:\t0 ns\n"
+    )
+    client_id, engines = parse_drm_fdinfo(text)
+    assert client_id == "42"
+    assert engines["render"] == 123456789
+    assert engines["video"] == 987654321
+    assert engines["video-enhance"] == 0
+    assert parse_drm_fdinfo("pos: 0\n") == (None, {})

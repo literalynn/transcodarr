@@ -90,13 +90,13 @@ function BitrateTable({ libraryId, codec, active }: { libraryId: number; codec: 
   };
 
   return (
-    <div className={cn("rounded-md border", active && "ring-1 ring-primary/50")}>
+    <div className={cn("overflow-x-auto rounded-md border", active && "ring-1 ring-primary/50")}>
       {active && (
         <div className="border-b bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
           {t("Échelle active (codec de sortie de la bibliothèque)")}
         </div>
       )}
-      <table className="w-full text-sm">
+      <table className="w-full min-w-[680px] text-sm">
         <thead>
           <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
             <th className="px-3 py-2">{t("Bucket")}</th>

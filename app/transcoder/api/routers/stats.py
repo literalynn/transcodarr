@@ -147,26 +147,40 @@ async def codecs(session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/gain-by-bucket")
 async def gain_by_bucket(session: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
+    """Gain moyen par BUCKET de résolution — pas par résolution brute : un
+    1920x804 cinémascope est du 1080p, sinon chaque crop créerait son
+    propre groupe d'un seul fichier."""
+    from transcoder.core.buckets import bucket_for_height
+
     rows = (
         await session.execute(
-            select(
-                Job.src_resolution,
-                Job.dst_codec,
-                func.avg(Job.gain_percent),
-                func.count(),
+            select(Job.src_resolution, Job.dst_codec, Job.gain_percent).where(
+                Job.state == JobState.SUCCESS, Job.gain_percent.is_not(None)
             )
-            .where(Job.state == JobState.SUCCESS, Job.gain_percent.is_not(None))
-            .group_by(Job.src_resolution, Job.dst_codec)
         )
     ).all()
+    agg: dict[tuple[str, str], tuple[float, int]] = {}
+    for res, codec, gain in rows:
+        if not res or "x" not in res or gain is None:
+            continue
+        try:
+            height = int(res.split("x")[1])
+        except (ValueError, IndexError):
+            continue
+        key = (bucket_for_height(height).value, codec or "?")
+        total, count = agg.get(key, (0.0, 0))
+        agg[key] = (total + float(gain), count + 1)
+    bucket_order = {"2160p": 0, "1440p": 1, "1080p": 2, "720p": 3, "576p": 4, "480p": 5}
     return [
         {
-            "resolution": res,
+            "resolution": bucket,
             "codec": codec,
-            "avg_gain_percent": float(avg) if avg is not None else None,
+            "avg_gain_percent": round(total / count, 2),
             "count": count,
         }
-        for res, codec, avg, count in rows
+        for (bucket, codec), (total, count) in sorted(
+            agg.items(), key=lambda kv: (bucket_order.get(kv[0][0], 9), kv[0][1])
+        )
     ]
 
 

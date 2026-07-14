@@ -4,7 +4,6 @@ import {
   Cpu,
   FolderOpen,
   History,
-  Languages,
   LayoutDashboard,
   ListOrdered,
   Menu,
@@ -29,7 +28,7 @@ const NAV = [
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { data: health } = useHealth();
-  const { t, lang, setLang } = useI18n();
+  const { t } = useI18n();
   const [dark, setDark] = useState(() => localStorage.getItem("theme") !== "light");
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -42,7 +41,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <Activity className="h-5 w-5 text-primary" />
         <div>
           <div className="text-sm font-bold leading-tight">Transcodarr</div>
-          <div className="font-mono text-[10px] text-muted-foreground">jftranscoder-v1</div>
+          <div className="font-mono text-[10px] text-muted-foreground">
+            v{health?.version ?? "…"}
+            {health?.build_date ? ` · ${health.build_date}` : ""}
+          </div>
         </div>
       </div>
       <nav className="flex-1 space-y-0.5 p-2">
@@ -76,14 +78,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             {health?.database ? t("en ligne") : t("hors ligne")}
           </span>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setLang(lang === "fr" ? "en" : "fr")}
-              className="flex items-center gap-1 rounded p-1 font-mono text-[10px] uppercase hover:bg-accent"
-              title={lang === "fr" ? "Switch to English" : "Passer en français"}
-            >
-              <Languages className="h-3.5 w-3.5" />
-              {lang === "fr" ? "EN" : "FR"}
-            </button>
             <button
               onClick={() => setDark((d) => !d)}
               className="rounded p-1 hover:bg-accent"

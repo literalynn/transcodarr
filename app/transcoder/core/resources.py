@@ -5,16 +5,17 @@ l'HÔTE entier, tandis que /sys/fs/cgroup/… (cgroup v2, vue namespacée)
 expose la consommation du conteneur seul — exactement la séparation
 « app vs reste du système » voulue par le dashboard.
 
-GPU Intel : best-effort via `intel_gpu_top -J` (nécessite CAP_PERFMON,
-ajouté dans le compose) ; à défaut, fréquence courante/max en proxy.
-Tout est dégradable : champ à null si la source n'existe pas (dev macOS).
+GPU : lecture des compteurs DRM `/proc/<pid>/fdinfo` (drm-engine-*) des
+processus du conteneur — c'est l'usage GPU de l'APP (ffmpeg), sans aucun
+privilège requis (intel_gpu_top exige des capacités effectives root,
+inaccessibles à un processus non-root même avec cap_add). Fréquences
+sysfs en complément. Tout est dégradable : champ à null si la source
+n'existe pas (dev macOS).
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
-import json
 import logging
 import os
 import time
@@ -57,9 +58,10 @@ _CGROUP_BASE = _cgroup_base()
 _CGROUP_CPU = f"{_CGROUP_BASE}/cpu.stat"
 _CGROUP_MEM = f"{_CGROUP_BASE}/memory.current"
 
-# Échantillons précédents pour les deltas CPU (module-level : un par process)
+# Échantillons précédents pour les deltas (module-level : un par process)
 _prev_host: tuple[float, int, int] | None = None  # (ts, busy_jiffies, total_jiffies)
 _prev_app: tuple[float, int] | None = None  # (ts, usage_usec)
+_prev_gpu: tuple[float, dict[str, int]] | None = None  # (ts, ns cumulés par moteur)
 
 
 def parse_proc_stat_line(line: str) -> tuple[int, int] | None:
@@ -95,6 +97,85 @@ def parse_cgroup_cpu_usage_usec(text: str) -> int | None:
             with contextlib.suppress(ValueError, IndexError):
                 return int(line.split()[1])
     return None
+
+
+def parse_drm_fdinfo(text: str) -> tuple[str | None, dict[str, int]]:
+    """Un fichier fdinfo DRM → (client_id, {moteur: ns cumulés}).
+
+    Format i915/xe : `drm-client-id: 42`, `drm-engine-render: 123456 ns`,
+    `drm-engine-video: … ns`. Un même client apparaît sur plusieurs fd :
+    l'appelant déduplique par client_id."""
+    client_id: str | None = None
+    engines: dict[str, int] = {}
+    for line in text.splitlines():
+        if line.startswith("drm-client-id:"):
+            client_id = line.split(":", 1)[1].strip()
+        elif line.startswith("drm-engine-"):
+            key, _, value = line.partition(":")
+            engine = key[len("drm-engine-") :]
+            parts = value.split()
+            if parts:
+                with contextlib.suppress(ValueError):
+                    engines[engine] = engines.get(engine, 0) + int(parts[0])
+    return client_id, engines
+
+
+def _sample_drm_engines() -> dict[str, int]:
+    """Somme des ns d'occupation par moteur GPU, tous processus du conteneur.
+
+    Le namespace PID du conteneur limite naturellement /proc à NOS processus
+    (python + ffmpeg) : c'est donc bien l'usage GPU de l'app qu'on mesure."""
+    totals: dict[str, int] = {}
+    seen_clients: set[str] = set()
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return totals
+    for pid in pids:
+        fdinfo_dir = f"/proc/{pid}/fdinfo"
+        try:
+            fds = os.listdir(fdinfo_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            text = _read(f"{fdinfo_dir}/{fd}")
+            if not text or "drm-engine-" not in text:
+                continue
+            client_id, engines = parse_drm_fdinfo(text)
+            dedupe_key = client_id or f"{pid}/{fd}"
+            if client_id is not None and dedupe_key in seen_clients:
+                continue
+            seen_clients.add(dedupe_key)
+            for engine, ns in engines.items():
+                totals[engine] = totals.get(engine, 0) + ns
+    return totals
+
+
+def _app_gpu_busy_percent() -> float | None:
+    """% d'occupation GPU de l'app : delta des compteurs fdinfo / temps.
+
+    On prend le moteur le PLUS occupé (video pour l'encodage QSV) : c'est
+    la lecture « à quel point mon GPU encode » attendue sur le dashboard."""
+    global _prev_gpu
+    current = _sample_drm_engines()
+    now = time.monotonic()
+    prev = _prev_gpu
+    _prev_gpu = (now, current)
+    if prev is None:
+        return None
+    if not current:
+        # aucun client DRM ouvert (pas d'encodage en cours) : 0 % réel
+        return 0.0
+    elapsed_ns = (now - prev[0]) * 1e9
+    if elapsed_ns <= 0:
+        return None
+    best = 0.0
+    for engine, ns in current.items():
+        prev_ns = prev[1].get(engine)
+        if prev_ns is None or ns < prev_ns:
+            continue
+        best = max(best, (ns - prev_ns) / elapsed_ns * 100.0)
+    return round(min(100.0, best), 1)
 
 
 def _host_cpu_percent() -> float | None:
@@ -133,11 +214,9 @@ def _app_cpu_percent(cores: int) -> float | None:
     return min(100.0, (usage - prev[1]) / elapsed_usec * 100.0)
 
 
-async def _gpu_busy_percent(drm_node: str) -> dict[str, Any]:
-    """Utilisation GPU : intel_gpu_top -J (1 échantillon), sinon fréquences."""
+def _gpu_info() -> dict[str, Any]:
+    """Utilisation GPU de l'app (fdinfo DRM) + fréquences sysfs."""
     out: dict[str, Any] = {"busy_percent": None, "freq_mhz": None, "freq_max_mhz": None}
-    # Fréquences sysfs (toujours lisibles avec le groupe render)
-    card = os.path.basename(drm_node).replace("renderD", "")
     for candidate in ("/sys/class/drm/card0", "/sys/class/drm/card1"):
         cur = _read(f"{candidate}/gt_cur_freq_mhz")
         maxi = _read(f"{candidate}/gt_max_freq_mhz")
@@ -146,64 +225,13 @@ async def _gpu_busy_percent(drm_node: str) -> dict[str, Any]:
                 out["freq_mhz"] = int(cur.strip())
                 out["freq_max_mhz"] = int(maxi.strip())
             break
-    _ = card
-    # intel_gpu_top : le 1er échantillon du flux -J est calculé sur un
-    # intervalle quasi nul (valeurs nulles/figées) → on échantillonne ~1,6 s
-    # et on garde le DERNIER objet JSON complet.
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "intel_gpu_top", "-J", "-s", "500", "-d", f"drm:{drm_node}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        assert proc.stdout is not None
-        buffer = b""
-        deadline = time.monotonic() + 1.8
-        while time.monotonic() < deadline:
-            try:
-                chunk = await asyncio.wait_for(proc.stdout.read(8192), timeout=0.4)
-            except asyncio.TimeoutError:
-                continue
-            if not chunk:
-                break
-            buffer += chunk
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        await proc.wait()
-
-        # Flux type "[ {...}, {...}" : extraire tous les objets complets
-        text = buffer.decode("utf-8", "replace")
-        decoder = json.JSONDecoder()
-        samples: list[Any] = []
-        idx = 0
-        while True:
-            brace = text.find("{", idx)
-            if brace < 0:
-                break
-            try:
-                obj, end = decoder.raw_decode(text, brace)
-            except json.JSONDecodeError:
-                break
-            samples.append(obj)
-            idx = end
-        # dernier échantillon (le 1er est sur un intervalle quasi nul)
-        for sample in reversed(samples):
-            engines = sample.get("engines", {}) if isinstance(sample, dict) else {}
-            busies = [
-                float(e.get("busy", 0.0))
-                for e in engines.values()
-                if isinstance(e, dict)
-            ]
-            if busies:
-                out["busy_percent"] = round(max(busies), 1)
-                break
-    except (OSError, FileNotFoundError):
-        pass  # intel_gpu_top absent ou sans CAP_PERFMON : fréquences seules
+    out["busy_percent"] = _app_gpu_busy_percent()
     return out
 
 
 async def sample_resources(drm_node: str = "/dev/dri/renderD128") -> dict[str, Any]:
-    """Instantané CPU/RAM/GPU, app vs hôte. Champs null si indisponibles."""
+    """Instantané CPU/RAM/GPU. Champs null si indisponibles."""
+    _ = drm_node
     cores = os.cpu_count() or 1
     host_cpu = _host_cpu_percent()
     app_cpu = _app_cpu_percent(cores)
@@ -219,7 +247,7 @@ async def sample_resources(drm_node: str = "/dev/dri/renderD128") -> dict[str, A
         with contextlib.suppress(ValueError):
             app_mem = int(mem_current.strip())
 
-    gpu = await _gpu_busy_percent(drm_node)
+    gpu = _gpu_info()
 
     other_cpu = None
     if host_cpu is not None and app_cpu is not None:

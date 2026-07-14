@@ -167,8 +167,10 @@ const EN: Record<string, string> = {
   "Réglages globaux (appliqués à chaud, sans redémarrage)":
     "Global settings (hot-applied, no restart)",
   "Sauvegarde de la configuration": "Configuration backup",
-  "Pour ne jamais reperdre la config (§9.5.10)":
-    "Never lose your config again (§9.5.10)",
+  "Export / import de la configuration (JSON)":
+    "Configuration export / import (JSON)",
+  "Langue de l'interface": "Interface language",
+  "Interface": "Interface",
   "Exporter (JSON)": "Export (JSON)",
   "Importer": "Import",
   "Dry-run global (aucun remplacement)": "Global dry-run (no replacement)",
@@ -230,8 +232,9 @@ interface I18nContextValue {
 const I18nContext = createContext<I18nContextValue | null>(null);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
+  // Défaut : anglais (projet partagé) ; le français se choisit dans les réglages
   const [lang, setLangState] = useState<Lang>(() =>
-    localStorage.getItem("lang") === "en" ? "en" : "fr",
+    localStorage.getItem("lang") === "fr" ? "fr" : "en",
   );
   const setLang = useCallback((next: Lang) => {
     localStorage.setItem("lang", next);

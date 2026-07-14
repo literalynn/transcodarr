@@ -80,6 +80,10 @@ RUN pip install --no-cache-dir ".[dev]"
 COPY --from=webbuild /build/dist /srv/web/dist
 ENV WEB_DIST_DIR=/srv/web/dist
 
+# Version applicative + date de build (affichées dans l'UI, endpoint /health)
+COPY VERSION /srv/app/VERSION
+RUN date -u +%Y-%m-%d > /srv/app/BUILD_DATE
+
 # L'app tourne en PUID:PGID via `user:` du compose ; /data est un bind-mount
 ENV HOME=/tmp
 EXPOSE 8080

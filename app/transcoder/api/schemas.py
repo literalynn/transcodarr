@@ -300,3 +300,5 @@ class HealthOut(BaseModel):
     database: bool
     workers: int
     dry_run_global: bool
+    version: str = "dev"
+    build_date: str | None = None
