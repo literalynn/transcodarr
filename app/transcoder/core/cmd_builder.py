@@ -29,6 +29,19 @@ class BuildError(ValueError):
     """Le plan de traitement ne permet pas de construire une commande."""
 
 
+def unmappable_stream_indexes(probe: MediaProbe) -> tuple[int, ...]:
+    """Index des pistes audio/sous-titres au codec INCONNU : impossibles à
+    copier (le muxer refuse d'écrire leur en-tête → tout le job échoue,
+    cas classique des MKV de fansub avec une piste corrompue)."""
+    bad: list[int] = []
+    for stream in (*probe.audio_streams, *probe.subtitle_streams):
+        codec = stream.get("codec")
+        index = stream.get("index")
+        if isinstance(index, int) and (not codec or codec == "none"):
+            bad.append(index)
+    return tuple(sorted(bad))
+
+
 @dataclass(frozen=True, slots=True)
 class BuildParams:
     """Entrées du builder — tout est explicite, rien n'est lu à l'extérieur."""
@@ -45,6 +58,8 @@ class BuildParams:
     # Chaîne zéro-copie Vulkan→QSV/VAAPI validée au démarrage (arbitrage 6).
     # False = repli logiciel (libplacebo sort en RAM, plus lent mais sûr).
     p5_zero_copy: bool = False
+    # Pistes au codec inconnu, exclues du mapping (voir unmappable_stream_indexes)
+    exclude_stream_indexes: tuple[int, ...] = ()
 
 
 _ENCODERS: dict[tuple[Codec, GpuApi], str] = {
@@ -206,12 +221,21 @@ def build_ffmpeg_cmd(params: BuildParams) -> list[str]:
         "-nostdin",
         "-y",
         *_hw_init(params),
+        # Certaines pistes (fansubs) demandent plus d'analyse pour être
+        # identifiées — sinon « unknown codec » et échec du mux
+        "-analyzeduration", "200M",
+        "-probesize", "200M",
         "-i", params.src_path,
         # Une seule piste vidéo (la première = BL pour un DV P7), tout le
         # reste — audio, sous-titres, data, attachments — conservé tel quel.
         "-map", "0",
         "-map", "-0:v",
         "-map", "0:v:0",
+    ]
+    # Pistes impossibles à copier (codec inconnu) : exclues explicitement
+    for index in params.exclude_stream_indexes:
+        cmd += ["-map", f"-0:{index}"]
+    cmd += [
         "-c", "copy",
         "-c:v", encoder,
     ]
@@ -287,5 +311,6 @@ def build_cmd_for(
             plan=plan,
             src_bit_depth=probe.bit_depth,
             p5_zero_copy=p5_zero_copy,
+            exclude_stream_indexes=unmappable_stream_indexes(probe),
         )
     )

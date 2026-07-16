@@ -116,15 +116,23 @@ def check_duration(src_duration_s: float | None, dst_duration_s: float | None) -
     )
 
 
+def _copyable(streams: list[dict[str, Any]]) -> int:
+    """Pistes effectivement copiables : les codecs inconnus (« none ») sont
+    exclus du mapping par le builder — ils ne comptent pas dans l'attendu."""
+    return sum(1 for s in streams if s.get("codec") and s.get("codec") != "none")
+
+
 def check_stream_counts(src_probe: MediaProbe, dst_probe: MediaProbe) -> CheckResult:
-    src_a, dst_a = len(src_probe.audio_streams), len(dst_probe.audio_streams)
-    src_s, dst_s = len(src_probe.subtitle_streams), len(dst_probe.subtitle_streams)
+    src_a, dst_a = _copyable(src_probe.audio_streams), len(dst_probe.audio_streams)
+    src_s, dst_s = _copyable(src_probe.subtitle_streams), len(dst_probe.subtitle_streams)
     ok = src_a == dst_a and src_s == dst_s
-    return CheckResult(
-        "6_streams",
-        ok,
-        f"audio {dst_a}/{src_a}, sous-titres {dst_s}/{src_s}",
+    dropped = (
+        len(src_probe.audio_streams) + len(src_probe.subtitle_streams) - src_a - src_s
     )
+    detail = f"audio {dst_a}/{src_a}, sous-titres {dst_s}/{src_s}"
+    if dropped:
+        detail += f" ({dropped} piste(s) au codec inconnu exclue(s))"
+    return CheckResult("6_streams", ok, detail)
 
 
 def check_gain(

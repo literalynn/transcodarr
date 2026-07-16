@@ -437,6 +437,10 @@ async def probe_file(path: str, ffprobe_path: str) -> MediaProbe:
             ffprobe_path,
             "-v",
             "error",
+            # Cohérent avec la commande d'encodage : certaines pistes
+            # (fansubs) demandent plus d'analyse pour être identifiées
+            "-analyzeduration", "200M",
+            "-probesize", "200M",
             "-print_format",
             "json",
             "-show_format",

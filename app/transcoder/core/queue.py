@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder import TOOL_ID
 from transcoder.core.capabilities import Capabilities, GpuCapability
-from transcoder.core.cmd_builder import BuildError, BuildParams, build_ffmpeg_cmd
+from transcoder.core.cmd_builder import (
+    BuildError,
+    BuildParams,
+    build_ffmpeg_cmd,
+    unmappable_stream_indexes,
+)
 from transcoder.core.dovi import (
     TreatmentAction,
     plan_treatment,
@@ -618,6 +623,14 @@ class QueueManager:
             await self._finalize_error(work, str(exc), retryable=True, config=config)
             return None
 
+        excluded_streams = unmappable_stream_indexes(probe)
+        if excluded_streams:
+            logger.warning(
+                "Job %d : piste(s) %s au codec inconnu — exclue(s) du mapping "
+                "(impossibles à copier, cas typique d'un sous-titre de fansub corrompu)",
+                work.job_id,
+                list(excluded_streams),
+            )
         try:
             cmd = build_ffmpeg_cmd(
                 BuildParams(
@@ -631,6 +644,7 @@ class QueueManager:
                     plan=plan,
                     src_bit_depth=probe.bit_depth,
                     p5_zero_copy=gpu_cap.p5_zero_copy,
+                    exclude_stream_indexes=excluded_streams,
                 )
             )
         except BuildError as exc:

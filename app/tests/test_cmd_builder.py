@@ -396,3 +396,38 @@ def test_stale_statistics_tags_are_stripped() -> None:
         assert f"-metadata:s:v:0 {tag}" in joined
     # Le tag anti-boucle, lui, reste intact
     assert "TRANSCODER_TAG=jftranscoder-v1|" in joined
+
+
+def test_unknown_codec_streams_are_excluded() -> None:
+    """Piste de sous-titres au codec inconnu (fansub corrompu) : exclue du
+    mapping — sinon le muxer Matroska refuse l'en-tête et le job échoue."""
+    from transcoder.core.cmd_builder import unmappable_stream_indexes
+
+    stream = {
+        "index": 0, "codec_type": "video", "codec_name": "hevc",
+        "width": 1920, "height": 1080, "pix_fmt": "yuv420p",
+        "disposition": {}, "tags": {},
+    }
+    audio = {"index": 1, "codec_type": "audio", "codec_name": "aac"}
+    sub_ok = {"index": 2, "codec_type": "subtitle", "codec_name": "ass"}
+    sub_broken = {"index": 5, "codec_type": "subtitle"}  # pas de codec_name
+    probe = parse_probe(
+        "/x/anime.mkv",
+        {"format": {"format_name": "matroska", "duration": "1400"},
+         "streams": [stream, audio, sub_ok, sub_broken]},
+    )
+    assert unmappable_stream_indexes(probe) == (5,)
+    plan = plan_treatment(
+        probe, hdr_policy=HdrPolicy.PRESERVE, dv_policy=DvPolicy.CONVERT_TO_HDR10, caps=CAPS
+    )
+    cmd = build_ffmpeg_cmd(
+        BuildParams(
+            ffmpeg_path="ffmpeg", src_path=probe.path, dst_path="/y.mkv",
+            gpu_api=GpuApi.QSV, drm_node=NODE, rule=_rule(), container=Container.MKV,
+            plan=plan, src_bit_depth=probe.bit_depth,
+            exclude_stream_indexes=unmappable_stream_indexes(probe),
+        )
+    )
+    joined = " ".join(cmd)
+    assert "-map -0:5" in joined
+    assert "-analyzeduration 200M" in joined and "-probesize 200M" in joined

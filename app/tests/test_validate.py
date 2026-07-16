@@ -256,3 +256,27 @@ def test_reference_decode_p7_p81_without_rpu() -> None:
     """Arbitrage 2 : P7/P8.1 → référence = BL décodée SANS RPU (pas de faux positifs)."""
     assert reference_decode_filter(_plan_for(7, compat=6)) is None
     assert reference_decode_filter(_plan_for(8, compat=1)) is None
+
+
+def test_stream_counts_ignore_unknown_codec_tracks() -> None:
+    """Les pistes au codec inconnu (exclues du mapping par le builder) ne
+    comptent pas dans la complétude attendue (§5.5.6)."""
+    src = _probe(audio=2, subs=1)
+    # Ajoute une piste de sous-titres SANS codec à la source
+    raw = {
+        "format": {"format_name": "matroska", "duration": "3600"},
+        "streams": [
+            {"index": 0, "codec_type": "video", "codec_name": "hevc", "width": 1920,
+             "height": 1080, "pix_fmt": "yuv420p", "disposition": {}, "tags": {}},
+            {"index": 1, "codec_type": "audio", "codec_name": "ac3"},
+            {"index": 2, "codec_type": "audio", "codec_name": "aac"},
+            {"index": 3, "codec_type": "subtitle", "codec_name": "subrip"},
+            {"index": 4, "codec_type": "subtitle"},  # codec inconnu
+        ],
+    }
+    src_with_broken = parse_probe("/x/src.mkv", raw)
+    dst = _probe(audio=2, subs=1)  # la piste cassée n'est pas dans la sortie
+    assert check_stream_counts(src_with_broken, dst).ok
+    # Mais une piste VALIDE manquante reste un échec
+    dst_missing = _probe(audio=1, subs=1)
+    assert not check_stream_counts(src_with_broken, dst_missing).ok
