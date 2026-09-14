@@ -32,9 +32,11 @@ destroy or corrupt an original file.**
   changes, or when Radarr/Sonarr upgrades the file (detected by content,
   not name). A mid-encode upgrade guard prevents a stale encode from ever
   overwriting a fresh upgrade.
-- **Early no-gain abort**: projected output size is monitored during the
-  encode; hopeless jobs are cancelled after ~15% instead of wasting hours
-  on a 4K film that won't shrink.
+- **Early no-gain abort, confirmed**: projected output size is monitored
+  during the encode; a job is cancelled only when two measurements (from
+  15% then 10 points later, slope-based) both exceed the gain threshold —
+  the figures are kept in the job for auditing. Files judged "no gain" from
+  an estimate can be re-evaluated in one click; measured results are kept.
 - **Pre-flight checks before touching the GPU**: source readable and not
   being copied, quick decode test, and a gain prediction calibrated on real
   jobs — files whose video bitrate is already below the target are skipped

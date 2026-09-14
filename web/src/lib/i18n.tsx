@@ -105,6 +105,21 @@ const EN: Record<string, string> = {
   "30 derniers jours": "last 30 days",
   "depuis le début": "all time",
   "Autres": "Other",
+  "Réévaluer les « sans gain »": "Re-evaluate “no gain” files",
+  "Réévalue les fichiers jugés « sans gain » sur une estimation (abandon anticipé, prédiction)":
+    "Re-evaluates files marked “no gain” from an estimate (early abort, prediction)",
+  "Réévaluer les fichiers « sans gain »": "Re-evaluate “no gain” files",
+  "Seules les décisions estimées sont réévaluées : l'ancien abandon anticipé jugeait « sans gain » des fichiers qui gagnent en réalité 15 à 58 %. Chaque fichier repasse la prédiction actuelle ; ceux qui laissent espérer un gain sont remis en file et encodés en entier, avec les 9 validations habituelles.":
+    "Only estimated decisions are re-evaluated: the former early abort marked as “no gain” files that actually shrink by 15 to 58%. Each file goes through the current prediction again; those that can still gain are queued and fully encoded, with the usual 9 validations.",
+  "Abandons anticipés (taille projetée à 15 %)": "Early aborts (size projected at 15%)",
+  "Prédictions du pré-vol ou du scan": "Pre-flight or scan predictions",
+  "→ remis en file pour un encodage complet": "→ queued for a full encode",
+  "→ confirmés sans gain (bitrate source déjà proche de la cible)": "→ confirmed no gain (source bitrate already near the target)",
+  "→ non évaluables (politique ou règle absente)": "→ not evaluable (policy or missing rule)",
+  "Gains mesurés après un encodage complet : conservés": "Gains measured after a full encode: kept",
+  "Aperçu impossible.": "Preview failed.",
+  "Calcul de l'aperçu…": "Computing preview…",
+  "Remettre en file": "Queue",
   "total": "total",
   "Répartition des codecs (bibliothèque actuelle)":
     "Codec distribution (current library)",

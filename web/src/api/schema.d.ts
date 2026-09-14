@@ -386,6 +386,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/files/requeue-no-gain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Requeue No Gain
+         * @description Remet en file les « sans gain » jamais mesurés (abandon anticipé,
+         *     prédiction) dont la prédiction actuelle laisse espérer un gain ; les
+         *     gains mesurés après encodage complet sont conservés.
+         */
+        post: operations["requeue_no_gain_api_v1_files_requeue_no_gain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/requeue-dry-run": {
         parameters: {
             query?: never;
@@ -1434,6 +1456,38 @@ export interface components {
          * @enum {string}
          */
         MediaStatus: "pending" | "queued" | "processing" | "done" | "failed" | "skipped_no_gain" | "skipped_policy" | "ignored";
+        /**
+         * NoGainReviewRequest
+         * @description Réévaluation des « sans gain » estimés (abandon anticipé, prédiction).
+         */
+        NoGainReviewRequest: {
+            /** Library Id */
+            library_id?: number | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+        };
+        /** NoGainReviewResult */
+        NoGainReviewResult: {
+            /** Dry Run */
+            dry_run: boolean;
+            /** Measured Kept */
+            measured_kept: number;
+            /** Early Aborts */
+            early_aborts: number;
+            /** Predictions */
+            predictions: number;
+            /** Still Hopeless */
+            still_hopeless: number;
+            /** Requeued */
+            requeued: number;
+            /** Not Evaluable */
+            not_evaluable: number;
+            /** Detail */
+            detail: string;
+        };
         /** PageMeta */
         PageMeta: {
             /** Total */
@@ -2298,6 +2352,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    requeue_no_gain_api_v1_files_requeue_no_gain_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoGainReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoGainReviewResult"];
                 };
             };
             /** @description Validation Error */

@@ -468,3 +468,37 @@ cercle (l'aqua clair est sous 3:1 : l'étiquette directe est obligatoire).
   (constaté au déploiement). `index.html` est désormais toujours revalidé,
   les assets Vite hachés sont immuables, et un asset absent renvoie un vrai
   404 au lieu d'index.html.
+
+## 2026-09-15 — « Sans gain » : faux positifs de l'abandon anticipé, réévaluation (0.10.1)
+
+**Constat en base.** 33 900 fichiers « sans gain » : 23 639 décidés par
+l'abandon anticipé à 15 % (17,3 To de sources), 10 259 mesurés après un
+encodage complet (sortie plus lourde que la source dans 98 % des cas), 2
+prédits par le pré-vol. Le seuil de gain (5 %) et les règles n'ont pas
+changé depuis juillet : la décision n'a jamais été réévaluée.
+
+**Banc non destructif sur des fichiers abandonnés** (encodage complet hors
+médias, sans base) : cinq épisodes d'anime à −44 %, −58 %, −48 %, −30 % et
+−15 % → faux positifs ; un sixième : sortie 7 % plus lourde → abandon justifié. Aujourd'hui la projection à 15 % tombe à ±3 % de la
+taille finale, y compris en rejouant la commande exacte de septembre (avec
+`-probesize 200M`) ; mêmes versions de FFmpeg, pilote Intel et noyau. Cause
+historique non reproduite : une décision sur une seule mesure est jugée trop
+fragile pour condamner un fichier.
+
+**Abandon anticipé confirmé** (`core/early_abort.py`) : alerte à 15 % si la
+projection simple dépasse le seuil ; abandon seulement si, au moins 10 points
+plus loin, la projection simple ET la projection par la pente entre les deux
+mesures dépassent encore le seuil. La pente neutralise tout surplus fixe écrit
+au début (en-tête, polices, paquets en avance) ; une pointe passagère est
+oubliée. Coût : 10 points d'encodage de plus sur un vrai « sans gain », rares
+depuis que le pré-vol écarte les bitrates déjà sous la cible. Les chiffres de
+la décision sont conservés dans `jobs.diagnostics.early_abort` et le message.
+
+**Réévaluation des « sans gain » estimés** (`POST /files/requeue-no-gain`,
+bouton de la page Queue avec aperçu chiffré) :
+- gain MESURÉ après encodage complet, ou abandon confirmé (0.10.1+) : conservé
+  (même règle, même résultat) ;
+- abandon sur une mesure (0.9) ou prédiction : la prédiction actuelle, celle
+  du scan, est rejouée depuis la base. Gain prévu insuffisant → confirmé sans
+  encoder (règle mémorisée) ; sinon → remis en file, nouvelle série complète.
+Rien n'est remis en file sans passer à nouveau le pré-vol et les validations.

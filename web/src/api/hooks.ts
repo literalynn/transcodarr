@@ -431,6 +431,21 @@ export function useRetryFailed() {
   });
 }
 
+/** Réévaluation des « sans gain » estimés : `dry_run` = aperçu sans effet. */
+export function useReviewNoGain() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (body: { library_id?: number; dry_run: boolean }) => {
+      const { data, error } = await api.POST("/api/v1/files/requeue-no-gain", { body });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (_data, body) => {
+      if (!body.dry_run) invalidate("files", "queue", "stats", "jobs", "file");
+    },
+  });
+}
+
 export function usePatchSettings() {
   const invalidate = useInvalidate();
   return useMutation({

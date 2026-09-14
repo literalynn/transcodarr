@@ -16,6 +16,7 @@ export type GpuCreate = Schemas["GpuCreate"];
 export type GpuPatch = Schemas["GpuPatch"];
 export type MediaFile = Schemas["MediaFileOut"];
 export type MediaFileDetail = Schemas["MediaFileDetail"];
+export type NoGainReview = Schemas["NoGainReviewResult"];
 export type MediaFilePage = Schemas["MediaFilePage"];
 export type Job = Schemas["JobOut"];
 export type JobDetail = Schemas["JobDetail"];

@@ -33,6 +33,7 @@ import decimal
 import logging
 import os
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -44,11 +45,13 @@ from transcoder import TOOL_ID
 from transcoder.core.capabilities import Capabilities, GpuCapability, mkvmerge_path_for
 from transcoder.core.cmd_builder import BuildError, BuildParams, build_ffmpeg_cmd
 from transcoder.core.dovi import (
+    DvCapabilities,
     TreatmentAction,
     TreatmentPlan,
     plan_treatment,
     resolve_output_hdr10_metadata,
 )
+from transcoder.core.early_abort import AbortDecision, EarlyAbortMonitor
 from transcoder.core.failures import (
     Failure,
     FailureCategory,
@@ -90,6 +93,7 @@ from transcoder.core.replace import (
     replace_original,
 )
 from transcoder.core.rules import NoRuleError, ResolvedRule, build_transcoder_tag, resolve_rule
+from transcoder.core.scanner import probe_from_row
 from transcoder.core.runner import ProgressUpdate, run_ffmpeg
 from transcoder.core.stream_plan import (
     StreamAction,
@@ -488,40 +492,29 @@ class QueueManager:
             # --- Encodage ------------------------------------------------------
             last_snapshot = 0.0
             last_progress_log = 0.0
-            early_abort_no_gain = False
-            src_size_for_abort = (
-                os.path.getsize(probe.path) if os.path.exists(probe.path) else 0
-            )
-            # Seuil §5.5.7 avec 5 % de marge : la projection VBR est bruitée,
-            # on n'abandonne que si le dépassement est franc.
-            no_gain_threshold = (
-                src_size_for_abort * (1.0 - prep.min_gain_percent / 100.0) * 1.05
+            abort_decision: AbortDecision | None = None
+            # Abandon anticipé (§5.5.7, early_abort_no_gain) : projection de la
+            # taille finale confirmée sur deux mesures (core/early_abort.py).
+            # Avec l'assemblage mkvmerge, FFmpeg n'écrit que la vidéo : la
+            # projection sous-estime la sortie, l'abandon reste prudent.
+            abort_monitor = (
+                EarlyAbortMonitor(
+                    src_size_bytes=os.path.getsize(probe.path),
+                    min_gain_percent=prep.min_gain_percent,
+                )
+                if config.early_abort_no_gain and not work.forced and os.path.exists(probe.path)
+                else None
             )
 
             async def on_progress(u: ProgressUpdate) -> None:
-                nonlocal last_snapshot, last_progress_log, early_abort_no_gain
-                # Abandon anticipé (façon Tdarr) : dès 15 % encodés, si la
-                # taille PROJETÉE dépasse déjà le seuil de gain, inutile de
-                # finir — surtout sur un gros 4K (§5.5.7, early_abort_no_gain)
-                if (
-                    config.early_abort_no_gain
-                    and not work.forced
-                    and not early_abort_no_gain
-                    and src_size_for_abort > 0
-                    and u.percent is not None
-                    and u.percent >= 15.0
-                    and u.total_size_bytes is not None
-                ):
-                    projected = u.total_size_bytes / (u.percent / 100.0)
-                    if projected > no_gain_threshold:
-                        early_abort_no_gain = True
+                nonlocal last_snapshot, last_progress_log, abort_decision
+                if abort_monitor is not None and abort_decision is None:
+                    abort_decision = abort_monitor.update(u.percent, u.total_size_bytes)
+                    if abort_decision is not None:
                         logger.info(
-                            "Job %d : ABANDON ANTICIPÉ à %.0f%% — taille projetée "
-                            "%.2f Gio > seuil %.2f Gio (gain insuffisant)",
+                            "Job %d : ABANDON ANTICIPÉ — %s (gain insuffisant)",
                             job_id,
-                            u.percent,
-                            projected / 1024**3,
-                            no_gain_threshold / 1024**3,
+                            abort_decision.describe(),
                         )
                         self._set_phase(job_id, "abandon anticipé : gain projeté insuffisant")
                         cancel_event.set()
@@ -573,13 +566,13 @@ class QueueManager:
                 result.avg_speed,
             )
             if prep.intermediate_path and (
-                early_abort_no_gain or result.cancelled or result.exit_code != 0
+                abort_decision is not None or result.cancelled or result.exit_code != 0
             ):
                 with contextlib.suppress(OSError):
                     os.unlink(prep.intermediate_path)
-            if early_abort_no_gain:
+            if abort_decision is not None:
                 await self._finalize_early_no_gain(
-                    work, rule, prep.tmp_path, result.log_tail, result.exit_code
+                    work, rule, prep.tmp_path, result.log_tail, result.exit_code, abort_decision
                 )
                 return
             if result.cancelled:
@@ -1290,10 +1283,12 @@ class QueueManager:
         tmp_path: str,
         log_tail: str,
         exit_code: int,
+        decision: AbortDecision,
     ) -> None:
         """Encodage interrompu car la projection de taille dépassait le seuil
         de gain : même issue que le contrôle 7 (§5.5.7) — original conservé,
-        fichier marqué traité pour ne pas être retenté, temporaire supprimé."""
+        fichier marqué traité pour ne pas être retenté, temporaire supprimé.
+        Les chiffres de la décision restent dans le job (audit)."""
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         async with session_scope() as session:
@@ -1302,9 +1297,8 @@ class QueueManager:
             if job is not None:
                 job.state = JobState.SKIPPED_NO_GAIN
                 job.exit_code = exit_code
-                job.error_message = (
-                    "abandon anticipé : taille projetée au-dessus du seuil de gain"
-                )
+                job.error_message = f"abandon anticipé : {decision.describe()}"
+                job.diagnostics = {**(job.diagnostics or {}), "early_abort": decision.as_dict()}
                 job.log_tail = log_tail
                 job.dst_path = None
                 job.finished_at = _now()
@@ -1771,6 +1765,159 @@ async def retry_failed_files(
         len(files),
     )
     return len(files)
+
+
+# ---------------------------------------------------------------------------
+# Réévaluation des « sans gain » jamais mesurés
+# ---------------------------------------------------------------------------
+NO_GAIN_MEASURED = "measured"
+NO_GAIN_EARLY_ABORT = "early_abort"
+NO_GAIN_PREDICTED = "predicted"
+
+
+def no_gain_origin(
+    strategy: str | None,
+    error_message: str | None,
+    diagnostics: dict[str, Any] | None = None,
+) -> str:
+    """Origine de la décision « sans gain » d'un job (pur) : gain MESURÉ
+    après encodage complet (ou abandon anticipé CONFIRMÉ sur deux mesures,
+    0.10.1+), ou seulement ESTIMÉ (abandon sur une mesure de la 0.9,
+    prédiction du pré-vol)."""
+    message = error_message or ""
+    if strategy == Strategy.PREFLIGHT.value or message.startswith("gain prévu insuffisant"):
+        return NO_GAIN_PREDICTED
+    if message.startswith("abandon anticipé"):
+        confirmed = isinstance(diagnostics, dict) and "early_abort" in diagnostics
+        return NO_GAIN_MEASURED if confirmed else NO_GAIN_EARLY_ABORT
+    return NO_GAIN_MEASURED
+
+
+@dataclass(slots=True)
+class NoGainReview:
+    """Bilan d'une réévaluation des fichiers « sans gain »."""
+
+    measured_kept: int = 0
+    early_aborts: int = 0
+    predictions: int = 0
+    still_hopeless: int = 0
+    requeued: int = 0
+    not_evaluable: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "measured_kept": self.measured_kept,
+            "early_aborts": self.early_aborts,
+            "predictions": self.predictions,
+            "still_hopeless": self.still_hopeless,
+            "requeued": self.requeued,
+            "not_evaluable": self.not_evaluable,
+        }
+
+
+async def review_estimated_no_gain(
+    session: AsyncSession,
+    *,
+    dv_caps: DvCapabilities,
+    library_id: int | None = None,
+    apply: bool = True,
+) -> NoGainReview:
+    """Remet en file les « sans gain » dont le gain n'a jamais été mesuré.
+
+    Constaté en production (0.9) : l'abandon anticipé à 15 % jugeait « sans
+    gain » des épisodes qui gagnent 44 à 58 % une fois encodés en entier. Un
+    gain MESURÉ après encodage complet reste acquis (même règle, même
+    résultat). Les décisions ESTIMÉES passent la prédiction actuelle, celle
+    du scan : gain prévu toujours insuffisant → confirmé sans encoder ;
+    sinon → nouvelle série de tentatives. `apply=False` : bilan seul."""
+    review = NoGainReview()
+    stmt = select(MediaFile).where(MediaFile.status == MediaStatus.SKIPPED_NO_GAIN)
+    if library_id is not None:
+        stmt = stmt.where(MediaFile.library_id == library_id)
+    files = (await session.execute(stmt)).scalars().all()
+    if not files:
+        return review
+
+    latest = (
+        select(Job.media_file_id, func.max(Job.id).label("job_id"))
+        .where(Job.state == JobState.SKIPPED_NO_GAIN)
+        .group_by(Job.media_file_id)
+        .subquery()
+    )
+    origins = {
+        file_id: no_gain_origin(strategy, message, diagnostics)
+        for file_id, strategy, message, diagnostics in (
+            await session.execute(
+                select(Job.media_file_id, Job.strategy, Job.error_message, Job.diagnostics).join(
+                    latest, latest.c.job_id == Job.id
+                )
+            )
+        ).all()
+    }
+    libraries = {lib.id: lib for lib in (await session.execute(select(Library))).scalars()}
+    rules: dict[int, list[BitrateRule]] = defaultdict(list)
+    for rule_row in (await session.execute(select(BitrateRule))).scalars():
+        rules[rule_row.library_id].append(rule_row)
+
+    for mf in files:
+        # Sans job « sans gain » : décision prise par la prédiction du scan
+        origin = origins.get(mf.id, NO_GAIN_PREDICTED)
+        if origin == NO_GAIN_MEASURED:
+            review.measured_kept += 1
+            continue
+        if origin == NO_GAIN_EARLY_ABORT:
+            review.early_aborts += 1
+        else:
+            review.predictions += 1
+        library = libraries.get(mf.library_id)
+        if library is None or mf.resolution_bucket is None:
+            review.not_evaluable += 1
+            continue
+        probe = probe_from_row(mf)
+        plan = plan_treatment(
+            probe, hdr_policy=library.hdr_policy, dv_policy=library.dv_policy, caps=dv_caps
+        )
+        if plan.action is TreatmentAction.SKIP:
+            review.not_evaluable += 1
+            continue
+        try:
+            rule = resolve_rule(
+                rules[library.id],
+                codec=library.output_codec,
+                bucket=mf.resolution_bucket,
+                is_hdr=plan.effective_is_hdr,
+                container=library.container,
+                hdr_policy=library.hdr_policy,
+                dv_policy=library.dv_policy,
+            )
+        except NoRuleError:
+            review.not_evaluable += 1
+            continue
+        prediction = predict_gain(
+            src_video_kbps=mf.video_bitrate_kbps,
+            size_bytes=mf.size_bytes,
+            duration_s=probe.duration_s,
+            target_kbps=rule.target_kbps,
+            min_gain_percent=float(library.min_gain_percent),
+            # Bitrate seulement estimable : le pré-vol du worker mesurera
+            allow_estimated=False,
+        )
+        if prediction.hopeless:
+            review.still_hopeless += 1
+            if apply:
+                mf.last_error = f"gain prévu insuffisant : {prediction.reason}"
+                mf.applied_rule_hash = rule.rule_hash
+            continue
+        review.requeued += 1
+        if apply:
+            reset_for_retry(mf)
+    logger.info(
+        "Réévaluation des « sans gain »%s%s : %s",
+        f" (bibliothèque {library_id})" if library_id is not None else "",
+        "" if apply else " [simulation]",
+        review.as_dict(),
+    )
+    return review
 
 
 # ---------------------------------------------------------------------------

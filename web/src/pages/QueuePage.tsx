@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  TrendingDown,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -27,11 +28,13 @@ import {
   useQueueState,
   useReorderQueue,
   useRetryFailed,
+  useReviewNoGain,
 } from "@/api/hooks";
 import { AttemptBadge, FailureBadge, StrategyBadge } from "@/components/diagnostics/badges";
 import { JobDetailDialog } from "@/components/diagnostics/JobDetailDialog";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input, Select } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FAILURE_CATEGORIES, failureMeta, STRATEGIES, strategyMeta } from "@/lib/failures";
@@ -794,6 +797,111 @@ function FailuresTab({
 }
 
 // ---------------------------------------------------------------------------
+// Réévaluation des « sans gain » estimés
+// ---------------------------------------------------------------------------
+function NoGainReviewDialog({
+  open,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDone: (detail: string) => void;
+}) {
+  const t = useT();
+  const { data: libraries } = useLibraries();
+  const [libraryId, setLibraryId] = useState<number | undefined>(undefined);
+  const preview = useReviewNoGain();
+  const apply = useReviewNoGain();
+  const previewMutate = preview.mutate;
+
+  useEffect(() => {
+    if (open) previewMutate({ library_id: libraryId, dry_run: true });
+  }, [open, libraryId, previewMutate]);
+
+  const data = preview.data;
+  const rows: { label: string; value: number | undefined; tone?: "good" | "muted" }[] = [
+    { label: t("Abandons anticipés (taille projetée à 15 %)"), value: data?.early_aborts },
+    { label: t("Prédictions du pré-vol ou du scan"), value: data?.predictions },
+    { label: t("→ remis en file pour un encodage complet"), value: data?.requeued, tone: "good" },
+    { label: t("→ confirmés sans gain (bitrate source déjà proche de la cible)"), value: data?.still_hopeless, tone: "muted" },
+    { label: t("→ non évaluables (politique ou règle absente)"), value: data?.not_evaluable, tone: "muted" },
+    { label: t("Gains mesurés après un encodage complet : conservés"), value: data?.measured_kept, tone: "muted" },
+  ];
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-w-xl">
+        <DialogTitle>{t("Réévaluer les fichiers « sans gain »")}</DialogTitle>
+        <p className="text-sm text-muted-foreground">
+          {t(
+            "Seules les décisions estimées sont réévaluées : l'ancien abandon anticipé jugeait « sans gain » des fichiers qui gagnent en réalité 15 à 58 %. Chaque fichier repasse la prédiction actuelle ; ceux qui laissent espérer un gain sont remis en file et encodés en entier, avec les 9 validations habituelles.",
+          )}
+        </p>
+        <div className="mt-4 space-y-3">
+          <Select
+            value={libraryId ?? ""}
+            onChange={(e) => setLibraryId(e.target.value ? Number(e.target.value) : undefined)}
+            aria-label={t("Bibliothèque")}
+          >
+            <option value="">{t("Toutes les bibliothèques")}</option>
+            {(libraries ?? []).map((lib) => (
+              <option key={lib.id} value={lib.id}>
+                {lib.name}
+              </option>
+            ))}
+          </Select>
+          {preview.isPending || !data ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">
+              {preview.isError ? t("Aperçu impossible.") : t("Calcul de l'aperçu…")}
+            </div>
+          ) : (
+            <dl className="space-y-1.5 rounded-md border p-3 text-sm">
+              {rows.map((row) => (
+                <div key={row.label} className="flex items-baseline justify-between gap-4">
+                  <dt className={cn(row.tone === "muted" && "text-muted-foreground")}>{row.label}</dt>
+                  <dd
+                    className={cn(
+                      "font-mono",
+                      row.tone === "good" && "font-semibold text-success",
+                      row.tone === "muted" && "text-muted-foreground",
+                    )}
+                  >
+                    {(row.value ?? 0).toLocaleString()}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            {t("Annuler")}
+          </Button>
+          <Button
+            disabled={!data || data.requeued === 0 || apply.isPending || preview.isPending}
+            onClick={() =>
+              apply.mutate(
+                { library_id: libraryId, dry_run: false },
+                {
+                  onSuccess: (result) => {
+                    onDone(result.detail);
+                    onClose();
+                  },
+                },
+              )
+            }
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {t("Remettre en file")} ({(data?.requeued ?? 0).toLocaleString()})
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 export function QueuePage() {
@@ -805,6 +913,7 @@ export function QueuePage() {
   const [detailJobId, setDetailJobId] = useState<number | null>(null);
   const [detailFileId, setDetailFileId] = useState<number | null>(null);
   const [actionResult, setActionResult] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const invalidate = useInvalidate();
   const { data: queue } = useQueueState();
   const { active } = useQueueSocket();
@@ -852,6 +961,14 @@ export function QueuePage() {
             onClick={() => void runAction("/api/v1/files/requeue-dry-run")}
           >
             <RefreshCw className="h-3.5 w-3.5" /> {t("Re-queuer les dry-run")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            title={t("Réévalue les fichiers jugés « sans gain » sur une estimation (abandon anticipé, prédiction)")}
+            onClick={() => setReviewOpen(true)}
+          >
+            <TrendingDown className="h-3.5 w-3.5" /> {t("Réévaluer les « sans gain »")}
           </Button>
           <div className="relative w-full sm:w-64">
             <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
@@ -908,6 +1025,11 @@ export function QueuePage() {
         </div>
       </Tabs>
 
+      <NoGainReviewDialog
+        open={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        onDone={setActionResult}
+      />
       <JobDetailDialog
         jobId={detailJobId}
         fileId={detailFileId}

@@ -7,7 +7,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder.api import schemas
-from transcoder.core.queue import requeue_dry_run_files, reset_for_retry, retry_failed_files
+from transcoder.api.deps import get_capabilities
+from transcoder.core.capabilities import Capabilities
+from transcoder.core.queue import (
+    requeue_dry_run_files,
+    reset_for_retry,
+    retry_failed_files,
+    review_estimated_no_gain,
+)
 from transcoder.db import get_db
 from transcoder.enums import MediaStatus
 from transcoder.models import Job, MediaFile
@@ -96,6 +103,26 @@ async def retry_failed(
         file_ids=payload.file_ids,
     )
     return schemas.ActionResult(ok=True, detail=f"{count} fichier(s) en échec remis en file")
+
+
+@router.post("/requeue-no-gain", response_model=schemas.NoGainReviewResult)
+async def requeue_no_gain(
+    payload: schemas.NoGainReviewRequest,
+    session: AsyncSession = Depends(get_db),
+    caps: Capabilities = Depends(get_capabilities),
+) -> schemas.NoGainReviewResult:
+    """Remet en file les « sans gain » jamais mesurés (abandon anticipé,
+    prédiction) dont la prédiction actuelle laisse espérer un gain ; les
+    gains mesurés après encodage complet sont conservés."""
+    review = await review_estimated_no_gain(
+        session, dv_caps=caps.dv_caps, library_id=payload.library_id, apply=not payload.dry_run
+    )
+    verb = "seraient remis" if payload.dry_run else "remis"
+    detail = (
+        f"{review.requeued} fichier(s) {verb} en file ; {review.still_hopeless} confirmé(s) "
+        f"sans gain par la prédiction ; {review.measured_kept} gain(s) mesuré(s) conservé(s)"
+    )
+    return schemas.NoGainReviewResult(dry_run=payload.dry_run, detail=detail, **review.as_dict())
 
 
 @router.post("/requeue-dry-run", response_model=schemas.ActionResult)

@@ -1355,6 +1355,48 @@
     }
    }
   },
+  "/api/v1/files/requeue-no-gain": {
+   "post": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Requeue No Gain",
+    "description": "Remet en file les « sans gain » jamais mesurés (abandon anticipé,\nprédiction) dont la prédiction actuelle laisse espérer un gain ; les\ngains mesurés après encodage complet sont conservés.",
+    "operationId": "requeue_no_gain_api_v1_files_requeue_no_gain_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/NoGainReviewRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NoGainReviewResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/files/requeue-dry-run": {
    "post": {
     "tags": [
@@ -4630,6 +4672,77 @@
      "ignored"
     ],
     "title": "MediaStatus"
+   },
+   "NoGainReviewRequest": {
+    "properties": {
+     "library_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Library Id"
+     },
+     "dry_run": {
+      "type": "boolean",
+      "title": "Dry Run",
+      "default": false
+     }
+    },
+    "type": "object",
+    "title": "NoGainReviewRequest",
+    "description": "Réévaluation des « sans gain » estimés (abandon anticipé, prédiction)."
+   },
+   "NoGainReviewResult": {
+    "properties": {
+     "dry_run": {
+      "type": "boolean",
+      "title": "Dry Run"
+     },
+     "measured_kept": {
+      "type": "integer",
+      "title": "Measured Kept"
+     },
+     "early_aborts": {
+      "type": "integer",
+      "title": "Early Aborts"
+     },
+     "predictions": {
+      "type": "integer",
+      "title": "Predictions"
+     },
+     "still_hopeless": {
+      "type": "integer",
+      "title": "Still Hopeless"
+     },
+     "requeued": {
+      "type": "integer",
+      "title": "Requeued"
+     },
+     "not_evaluable": {
+      "type": "integer",
+      "title": "Not Evaluable"
+     },
+     "detail": {
+      "type": "string",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "required": [
+     "dry_run",
+     "measured_kept",
+     "early_aborts",
+     "predictions",
+     "still_hopeless",
+     "requeued",
+     "not_evaluable",
+     "detail"
+    ],
+    "title": "NoGainReviewResult"
    },
    "PageMeta": {
     "properties": {

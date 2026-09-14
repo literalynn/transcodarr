@@ -302,6 +302,30 @@ class ActionResult(BaseModel):
     detail: str | None = None
 
 
+class NoGainReviewRequest(BaseModel):
+    """Réévaluation des « sans gain » estimés (abandon anticipé, prédiction)."""
+
+    library_id: int | None = None
+    # true : bilan seul, rien n'est modifié (aperçu avant confirmation)
+    dry_run: bool = False
+
+
+class NoGainReviewResult(BaseModel):
+    dry_run: bool
+    # Gain mesuré après un encodage complet : décision conservée
+    measured_kept: int
+    # Décisions estimées : abandons anticipés et prédictions (pré-vol/scan)
+    early_aborts: int
+    predictions: int
+    # Parmi les estimées : gain prévu toujours insuffisant (confirmé sans encoder)
+    still_hopeless: int
+    # Parmi les estimées : remis en file pour un encodage complet
+    requeued: int
+    # Politique ou règle absente : laissés tels quels
+    not_evaluable: int
+    detail: str
+
+
 # ---------------------------------------------------------------------------
 # Settings / config / système
 # ---------------------------------------------------------------------------
