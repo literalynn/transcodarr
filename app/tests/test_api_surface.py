@@ -106,15 +106,25 @@ def test_spa_fallback_serves_index(tmp_path: "Path") -> None:
     dist.mkdir()
     (dist / "index.html").write_text("<html>SPA</html>", encoding="utf-8")
     (dist / "app.js").write_text("js", encoding="utf-8")
+    (dist / "assets").mkdir()
+    (dist / "assets" / "index-abc123.js").write_text("hashed", encoding="utf-8")
 
     app = Starlette()
     app.mount("/", SpaStaticFiles(directory=str(dist), html=True))
     client = TestClient(app)
-    assert client.get("/").status_code == 200
+    root = client.get("/")
+    assert root.status_code == 200
     assert client.get("/app.js").text == "js"
     deep = client.get("/queue")
     assert deep.status_code == 200
     assert "SPA" in deep.text
+    # index.html toujours revalidé (nouvelle interface visible après mise à jour)
+    assert root.headers["cache-control"] == "no-cache"
+    assert deep.headers["cache-control"] == "no-cache"
+    # Assets hachés : immuables ; absent : vrai 404, jamais index.html
+    asset = client.get("/assets/index-abc123.js")
+    assert asset.text == "hashed" and "immutable" in asset.headers["cache-control"]
+    assert client.get("/assets/index-old999.js").status_code == 404
 
 
 def test_jobs_list_exposes_diagnostic_filters(openapi: dict[str, Any]) -> None:

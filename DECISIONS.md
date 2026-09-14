@@ -463,3 +463,8 @@ cercle (l'aqua clair est sous 3:1 : l'étiquette directe est obligatoire).
 - Scan : un fichier « sans gain » réévalué après changement de règle mémorise
   la nouvelle règle (plus de réévaluation à chaque scan) ; un fichier en file
   au milieu d'une série de replis garde sa dernière erreur affichée.
+- Cache HTTP de l'interface : `index.html` partait sans en-tête de cache et
+  le navigateur réaffichait l'ancienne interface après une mise à jour
+  (constaté au déploiement). `index.html` est désormais toujours revalidé,
+  les assets Vite hachés sont immuables, et un asset absent renvoie un vrai
+  404 au lieu d'index.html.

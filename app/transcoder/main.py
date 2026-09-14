@@ -132,17 +132,33 @@ async def _run_backfill() -> None:
 class SpaStaticFiles(StaticFiles):
     """Fichiers statiques avec fallback SPA : toute route inconnue (hors
     /api et /ws, matchées avant le mount) sert index.html pour que le
-    routeur React gère les liens profonds et le rafraîchissement."""
+    routeur React gère les liens profonds et le rafraîchissement.
+
+    Cache : index.html est toujours revalidé (sinon le navigateur garde
+    l'ancienne interface après une mise à jour, faute d'en-tête de cache),
+    les assets Vite (noms hachés par contenu) sont immuables. Un asset
+    absent reste un 404 : lui renvoyer index.html casserait le chargement."""
+
+    _ASSETS_PREFIX = "assets/"
 
     async def get_response(self, path: str, scope: Scope) -> Response:
+        is_asset = path.startswith(self._ASSETS_PREFIX)
         try:
             response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404:
-                return await super().get_response("index.html", scope)
+            if exc.status_code == 404 and not is_asset:
+                return await self._index(scope)
             raise
-        if response.status_code == 404:
-            return await super().get_response("index.html", scope)
+        if response.status_code == 404 and not is_asset:
+            return await self._index(scope)
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable" if is_asset else "no-cache"
+        )
+        return response
+
+    async def _index(self, scope: Scope) -> Response:
+        response = await super().get_response("index.html", scope)
+        response.headers["Cache-Control"] = "no-cache"
         return response
 
 
