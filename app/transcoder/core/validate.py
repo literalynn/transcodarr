@@ -23,8 +23,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from transcoder.core.dovi import TreatmentAction, TreatmentPlan
-from transcoder.core.probe import MediaProbe, ProbeError, probe_file
+from transcoder.core.dovi import TreatmentPlan
+from transcoder.core.failures import describe_exit_code, is_crash_exit
+from transcoder.core.preflight import significant_decode_errors
+from transcoder.core.probe import (
+    MediaProbe,
+    ProbeError,
+    is_legacy_timestamp_format,
+    probe_file,
+    probe_stream_timeline,
+)
+from transcoder.core.stream_plan import StreamAction, StreamPlan
 from transcoder.enums import Codec, HdrFormat
 
 logger = logging.getLogger(__name__)
@@ -47,9 +56,14 @@ class CheckResult:
     name: str
     ok: bool
     detail: str
+    # Données de diagnostic (code de sortie, stderr, durées mesurées…)
+    meta: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "ok": self.ok, "detail": self.detail}
+        out: dict[str, Any] = {"name": self.name, "ok": self.ok, "detail": self.detail}
+        if self.meta:
+            out["meta"] = self.meta
+        return out
 
 
 @dataclass(slots=True)
@@ -60,11 +74,13 @@ class ValidationReport:
     dst_probe: MediaProbe | None = None
 
     @property
+    def failed_check(self) -> CheckResult | None:
+        return next((c for c in self.checks if not c.ok), None)
+
+    @property
     def failure_reason(self) -> str | None:
-        for c in self.checks:
-            if not c.ok:
-                return f"{c.name} : {c.detail}"
-        return None
+        c = self.failed_check
+        return f"{c.name} : {c.detail}" if c is not None else None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -107,12 +123,162 @@ def check_codec(dst_probe: MediaProbe, target: Codec) -> CheckResult:
 def check_duration(src_duration_s: float | None, dst_duration_s: float | None) -> CheckResult:
     if src_duration_s is None or dst_duration_s is None:
         return CheckResult("4_duration", False, "durée source ou sortie inconnue")
-    tolerance = max(1.0, src_duration_s * 0.005)
+    tolerance = duration_tolerance(src_duration_s)
     delta = abs(dst_duration_s - src_duration_s)
     return CheckResult(
         "4_duration",
         delta <= tolerance,
         f"Δ={delta:.2f}s (tolérance {tolerance:.2f}s)",
+    )
+
+
+def duration_tolerance(src_duration_s: float) -> float:
+    return max(1.0, src_duration_s * 0.005)
+
+
+async def check_real_duration(
+    *,
+    ffprobe_path: str,
+    src_probe: MediaProbe,
+    dst_probe: MediaProbe,
+    dst_path: str,
+    format_check: CheckResult,
+) -> CheckResult:
+    """Contrôle 4, second avis quand les durées CONTENEUR divergent.
+
+    Compare la durée réelle (horodatages des paquets) de la piste vidéo et
+    de la première piste audio, source contre sortie. Une durée conteneur
+    gonflée par un sous-titre ou mal estimée (AVI) n'est pas une troncature :
+    seules les pistes elles-mêmes font foi."""
+    src_hint, dst_hint = src_probe.duration_s, dst_probe.duration_s
+    measures: dict[str, Any] = {
+        "container_src_s": src_hint,
+        "container_dst_s": dst_hint,
+    }
+    problems: list[str] = []
+    compared: list[str] = []
+    selectors = ["v:0"] + (["a:0"] if src_probe.audio_streams and dst_probe.audio_streams else [])
+    for selector in selectors:
+        src_tl = await probe_stream_timeline(
+            src_probe.path, ffprobe_path, selector=selector, duration_hint_s=src_hint,
+            full_scan=is_legacy_timestamp_format(src_probe.format_name),
+        )
+        dst_tl = await probe_stream_timeline(
+            dst_path, ffprobe_path, selector=selector, duration_hint_s=dst_hint,
+            full_scan=is_legacy_timestamp_format(dst_probe.format_name),
+        )
+        label = "vidéo" if selector.startswith("v") else "audio"
+        if src_tl is None or dst_tl is None:
+            if selector.startswith("v"):
+                return CheckResult(
+                    "4_duration",
+                    False,
+                    f"{format_check.detail} ; durée réelle de la piste vidéo non mesurable",
+                    meta=measures,
+                )
+            continue
+        tolerance = duration_tolerance(src_tl.duration_s)
+        delta = abs(dst_tl.duration_s - src_tl.duration_s)
+        measures[f"{label}_src_s"] = round(src_tl.duration_s, 3)
+        measures[f"{label}_dst_s"] = round(dst_tl.duration_s, 3)
+        compared.append(f"{label} {dst_tl.duration_s:.2f}s/{src_tl.duration_s:.2f}s")
+        if delta > tolerance:
+            problems.append(f"{label} Δ={delta:.2f}s (tolérance {tolerance:.2f}s)")
+    if problems:
+        return CheckResult(
+            "4_duration",
+            False,
+            "pistes tronquées ou décalées : " + ", ".join(problems)
+            + f" (durées conteneur : sortie {dst_hint or 0:.2f}s / source {src_hint or 0:.2f}s)",
+            meta=measures,
+        )
+    return CheckResult(
+        "4_duration",
+        True,
+        f"durées conteneur divergentes ({format_check.detail}) mais pistes identiques : "
+        + ", ".join(compared),
+        meta=measures,
+    )
+
+
+# « [sost#0:4/copy @ 0x…] Non-monotonic DTS; previous: 1380980, current: 1217660;
+#   changing to 1380980 » — FFmpeg déplace un paquet copié pour garder des
+# horodatages croissants : un événement de sous-titres (ou de l'audio) est
+# alors décalé dans le fichier produit.
+_DTS_CORRECTION = re.compile(
+    r"\[(?P<kind>[vaso])ost#\d+:(?P<stream>\d+)/[^ @\]]* @ [^\]]*\] Non-monotonic DTS; "
+    r"previous: (?P<previous>-?\d+), current: (?P<current>-?\d+)"
+)
+# Décalage maximal toléré (ms, base de temps Matroska) : au-delà, le
+# minutage d'un sous-titre ou d'un son est visiblement/audiblement changé
+MAX_TIMESTAMP_SHIFT_MS = 250
+
+
+@dataclass(frozen=True, slots=True)
+class TimestampCorrections:
+    """Corrections d'horodatages appliquées par FFmpeg, par type de piste."""
+
+    count: dict[str, int]
+    max_shift_ms: dict[str, int]
+    worst_stream: dict[str, int]
+
+
+def parse_dts_corrections(log: str) -> TimestampCorrections:
+    """Relevé des « Non-monotonic DTS » du log d'encodage (pur)."""
+    count: dict[str, int] = {}
+    max_shift: dict[str, int] = {}
+    worst: dict[str, int] = {}
+    for match in _DTS_CORRECTION.finditer(log):
+        kind = match.group("kind")
+        shift = int(match.group("previous")) - int(match.group("current"))
+        count[kind] = count.get(kind, 0) + 1
+        if shift > max_shift.get(kind, -1):
+            max_shift[kind] = shift
+            worst[kind] = int(match.group("stream"))
+    return TimestampCorrections(count=count, max_shift_ms=max_shift, worst_stream=worst)
+
+
+def check_copied_timestamps(log: str | None, *, matroska_output: bool) -> CheckResult:
+    """Contrôle 6b : aucune piste copiée n'a été décalée par FFmpeg.
+
+    Protège en particulier les sous-titres ASS (typesetting) : un décalage
+    de paquets les casse sans que les durées ni le nombre de pistes ne
+    changent. Les corrections d'une milliseconde (sous-titres image aux
+    segments de même horodatage) restent tolérées et sont rapportées."""
+    if log is None:
+        return CheckResult("6b_timestamps", True, "log d'encodage indisponible : contrôle ignoré")
+    corrections = parse_dts_corrections(log)
+    labels = {"s": "sous-titres", "a": "audio", "v": "vidéo", "o": "autre"}
+    meta: dict[str, Any] = {
+        "corrections": corrections.count,
+        "max_shift_ms": corrections.max_shift_ms,
+    }
+    if not corrections.count:
+        return CheckResult("6b_timestamps", True, "aucun horodatage de piste modifié", meta=meta)
+    # Base de temps des messages : milliseconde en Matroska ; ailleurs, le
+    # décalage n'est pas convertible de façon sûre → toute correction compte
+    limit = MAX_TIMESTAMP_SHIFT_MS if matroska_output else 0
+    problems = [
+        f"{labels.get(kind, kind)} (piste de sortie #{corrections.worst_stream[kind]}) : "
+        f"{corrections.count[kind]} paquet(s) déplacé(s), jusqu'à "
+        f"{corrections.max_shift_ms[kind] / 1000:.2f} s"
+        for kind in sorted(corrections.count)
+        if corrections.max_shift_ms[kind] > limit
+    ]
+    summary = ", ".join(
+        f"{labels.get(k, k)} {n} (max {corrections.max_shift_ms[k]} ms)"
+        for k, n in sorted(corrections.count.items())
+    )
+    if problems:
+        meta["subtitles"] = any(p.startswith("sous-titres") for p in problems)
+        return CheckResult(
+            "6b_timestamps",
+            False,
+            "horodatages modifiés par FFmpeg pendant la copie : " + " ; ".join(problems),
+            meta=meta,
+        )
+    return CheckResult(
+        "6b_timestamps", True, f"corrections négligeables tolérées ({summary})", meta=meta
     )
 
 
@@ -122,16 +288,30 @@ def _copyable(streams: list[dict[str, Any]]) -> int:
     return sum(1 for s in streams if s.get("codec") and s.get("codec") != "none")
 
 
-def check_stream_counts(src_probe: MediaProbe, dst_probe: MediaProbe) -> CheckResult:
-    src_a, dst_a = _copyable(src_probe.audio_streams), len(dst_probe.audio_streams)
-    src_s, dst_s = _copyable(src_probe.subtitle_streams), len(dst_probe.subtitle_streams)
+def check_stream_counts(
+    src_probe: MediaProbe,
+    dst_probe: MediaProbe,
+    *,
+    stream_plan: StreamPlan | None = None,
+) -> CheckResult:
+    """Contrôle 6 : toutes les pistes prévues sont présentes en sortie.
+
+    L'attendu vient du plan de pistes quand il existe (exclusions motivées
+    et conversions décidées avant l'encodage), sinon de la source."""
+    if stream_plan is not None:
+        src_a, src_s = stream_plan.expected_audio, stream_plan.expected_subtitles
+        dropped = sum(
+            1 for d in stream_plan.adjustments
+            if d.kind in ("audio", "subtitle") and d.action is StreamAction.DROP
+        )
+    else:
+        src_a, src_s = _copyable(src_probe.audio_streams), _copyable(src_probe.subtitle_streams)
+        dropped = len(src_probe.audio_streams) + len(src_probe.subtitle_streams) - src_a - src_s
+    dst_a, dst_s = len(dst_probe.audio_streams), len(dst_probe.subtitle_streams)
     ok = src_a == dst_a and src_s == dst_s
-    dropped = (
-        len(src_probe.audio_streams) + len(src_probe.subtitle_streams) - src_a - src_s
-    )
     detail = f"audio {dst_a}/{src_a}, sous-titres {dst_s}/{src_s}"
     if dropped:
-        detail += f" ({dropped} piste(s) au codec inconnu exclue(s))"
+        detail += f" ({dropped} piste(s) exclue(s) par le plan de pistes)"
     return CheckResult("6_streams", ok, detail)
 
 
@@ -307,6 +487,32 @@ async def _run_ffmpeg_with_progress(
     )
 
 
+def integrity_result(
+    code: int, stderr: str, *, scope: str, after_seek: bool = False
+) -> CheckResult:
+    """Interprète un décodage d'intégrité (pur, testé sans binaire)."""
+    errors = significant_decode_errors(stderr, after_seek=after_seek)
+    crashed = is_crash_exit(code) or (code != 0 and not errors)
+    meta: dict[str, Any] = {"exit_code": code, "crashed": crashed}
+    if code == 0 and not errors:
+        return CheckResult("5_integrity", True, f"{scope} sans erreur", meta={"exit_code": 0})
+    meta["stderr"] = "\n".join(errors[-20:])[:2000]
+    if crashed:
+        return CheckResult(
+            "5_integrity",
+            False,
+            f"le décodeur de vérification s'est arrêté sans message ({describe_exit_code(code)})",
+            meta=meta,
+        )
+    return CheckResult(
+        "5_integrity",
+        False,
+        f"erreurs de décodage de la vidéo produite ({describe_exit_code(code)}) : "
+        + " | ".join(errors[:3])[:300],
+        meta=meta,
+    )
+
+
 async def _check_decode_integrity(
     ffmpeg_path: str,
     dst_path: str,
@@ -315,7 +521,14 @@ async def _check_decode_integrity(
     duration_s: float | None,
     on_progress: DecodeProgressCallback | None = None,
 ) -> CheckResult:
-    """Contrôle 5 : décodage CPU complet (ou 3 segments de 30 s si `sample`)."""
+    """Contrôle 5 : décodage CPU de la VIDÉO produite (complet ou 3 segments).
+
+    Seule la piste vidéo est décodée : c'est la seule réencodée. Les pistes
+    audio sont des copies bit à bit de la source — leurs éventuelles erreurs
+    préexistent (constaté en production : trames AC3/MP3/AAC abîmées dans la
+    source faisaient échouer des encodages parfaits). Si le décodeur plante
+    sans message, une seconde passe mono-thread départage un crash de l'outil
+    d'un vrai problème de flux."""
     if mode == "sample" and duration_s and duration_s > 120:
         for ratio in (0.1, 0.5, 0.9):
             start = duration_s * ratio
@@ -325,32 +538,57 @@ async def _check_decode_integrity(
                     "-v", "error", "-xerror",
                     "-ss", f"{start:.2f}", "-t", "30",
                     "-i", dst_path,
+                    "-map", "0:v:0",
                     "-f", "null", "-",
                 ]
             )
-            if code != 0 or out.strip():
-                return CheckResult(
-                    "5_integrity", False, f"erreur de décodage à {start:.0f}s : {out.strip()[:300]}"
-                )
-        return CheckResult("5_integrity", True, "3 segments de 30 s décodés sans erreur")
+            result = integrity_result(
+                code, out, scope=f"segment à {start:.0f}s", after_seek=True
+            )
+            if not result.ok:
+                return result
+        return CheckResult("5_integrity", True, "3 segments vidéo de 30 s décodés sans erreur")
 
-    code, err = await _run_ffmpeg_with_progress(
-        [
-            ffmpeg_path, "-hide_banner", "-nostdin",
-            "-v", "error", "-xerror",
-            "-progress", "pipe:1", "-nostats",
-            "-i", dst_path,
-            "-f", "null", "-",
-        ],
-        duration_s=duration_s,
-        on_progress=on_progress,
-    )
-    ok = code == 0 and not err.strip()
-    return CheckResult(
-        "5_integrity",
-        ok,
-        "décodage intégral sans erreur" if ok else f"erreurs : {err.strip()[:300]}",
-    )
+    async def full_decode(extra: list[str]) -> CheckResult:
+        code, err = await _run_ffmpeg_with_progress(
+            [
+                ffmpeg_path, "-hide_banner", "-nostdin",
+                "-v", "error", "-xerror",
+                *extra,
+                "-progress", "pipe:1", "-nostats",
+                "-i", dst_path,
+                "-map", "0:v:0",
+                "-f", "null", "-",
+            ],
+            duration_s=duration_s,
+            on_progress=on_progress,
+            # Un 4K de 3 h décodé sur CPU peut dépasser 2 h : délai proportionnel
+            timeout=max(7200.0, (duration_s or 0.0) * 4.0),
+        )
+        if code == -2:
+            return CheckResult(
+                "5_integrity",
+                False,
+                "décodage de vérification trop long (délai dépassé)",
+                meta={"exit_code": code, "timeout": True, "crashed": False},
+            )
+        return integrity_result(code, err, scope="décodage intégral de la vidéo")
+
+    result = await full_decode([])
+    if not result.ok and result.meta and result.meta.get("crashed"):
+        logger.warning(
+            "Intégrité %s : décodeur arrêté sans message (%s) — seconde passe mono-thread",
+            os.path.basename(dst_path), result.detail,
+        )
+        retry = await full_decode(["-threads", "1"])
+        if retry.ok:
+            return CheckResult(
+                "5_integrity", True,
+                "décodage intégral sans erreur (seconde passe mono-thread après arrêt du décodeur)",
+                meta={"first_pass": result.meta},
+            )
+        return retry
+    return result
 
 
 async def _extract_frame(
@@ -489,6 +727,9 @@ async def validate_output(
     dv_ssim_threshold: float,
     dv_chroma_delta_max: float,
     tmp_dir: str,
+    stream_plan: StreamPlan | None = None,
+    ffmpeg_log_path: str | None = None,
+    ffmpeg_log_offset: int = 0,
     on_check: CheckCallback | None = None,
     on_decode_progress: DecodeProgressCallback | None = None,
 ) -> ValidationReport:
@@ -544,6 +785,14 @@ async def validate_output(
     # 4 — durée
     await _step("4/9 durée source/sortie")
     c4 = check_duration(src_probe.duration_s, dst_probe.duration_s)
+    if not c4.ok and src_probe.duration_s is not None and dst_probe.duration_s is not None:
+        c4 = await check_real_duration(
+            ffprobe_path=ffprobe_path,
+            src_probe=src_probe,
+            dst_probe=dst_probe,
+            dst_path=dst_path,
+            format_check=c4,
+        )
     if not c4.ok:
         return _fail(c4)
     report.checks.append(c4)
@@ -563,10 +812,28 @@ async def validate_output(
 
     # 6 — complétude des flux
     await _step("6/9 complétude des pistes")
-    c6 = check_stream_counts(src_probe, dst_probe)
+    c6 = check_stream_counts(src_probe, dst_probe, stream_plan=stream_plan)
     if not c6.ok:
         return _fail(c6)
     report.checks.append(c6)
+
+    # 6b — minutage des pistes copiées (sous-titres ASS en particulier)
+    await _step("6/9 minutage des pistes copiées")
+    log_text: str | None = None
+    if ffmpeg_log_path:
+        try:
+            with open(ffmpeg_log_path, "rb") as fh:
+                # Seulement la tentative en cours (log partagé après reprise)
+                fh.seek(ffmpeg_log_offset)
+                log_text = fh.read().decode("utf-8", "replace")
+        except OSError:
+            log_text = None
+    c6b = check_copied_timestamps(
+        log_text, matroska_output=dst_path.lower().endswith((".mkv", ".mka"))
+    )
+    if not c6b.ok:
+        return _fail(c6b)
+    report.checks.append(c6b)
 
     # 7 — gain (pas un échec : skipped_no_gain, original conservé)
     await _step("7/9 gain de taille")

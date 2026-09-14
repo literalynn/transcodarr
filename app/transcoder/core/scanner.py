@@ -27,10 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from transcoder import TOOL_ID
 from transcoder.core.buckets import bucket_for_height
 from transcoder.core.dovi import DvCapabilities, TreatmentAction, TreatmentPlan, plan_treatment
+from transcoder.core.failures import FailureCategory
+from transcoder.core.preflight import predict_gain
 from transcoder.core.probe import MediaProbe, ProbeError, probe_file
 from transcoder.core.replace import TMP_DIR_NAME
 from transcoder.core.rules import NoRuleError, parse_transcoder_tag, resolve_rule
-from transcoder.enums import HdrFormat, MediaStatus, ResolutionBucket
+from transcoder.enums import HdrFormat, MediaStatus
 from transcoder.models import BitrateRule, Library, MediaFile
 from transcoder.runtime_config import RuntimeConfig
 
@@ -45,6 +47,8 @@ class ScanResult:
     unchanged: int = 0
     queued: int = 0
     requeued_rule_change: int = 0
+    requeued_failed_changed: int = 0
+    skipped_no_gain_predicted: int = 0
     skipped_policy: int = 0
     ignored_date: int = 0
     failed_probe: int = 0
@@ -59,6 +63,8 @@ class ScanResult:
             "unchanged": self.unchanged,
             "queued": self.queued,
             "requeued_rule_change": self.requeued_rule_change,
+            "requeued_failed_changed": self.requeued_failed_changed,
+            "skipped_no_gain_predicted": self.skipped_no_gain_predicted,
             "skipped_policy": self.skipped_policy,
             "ignored_date": self.ignored_date,
             "failed_probe": self.failed_probe,
@@ -82,6 +88,15 @@ class FileFacts:
     existing_applied_hash: str | None
     existing_retry_count: int
     max_retries: int
+    # Taille/mtime différents de la dernière sonde : fichier remplacé (*arr)
+    file_changed: bool = False
+    # « Forcer le réencodage » en attente (manual_rank = 0)
+    forced: bool = False
+    # Prédiction de gain (preflight.predict_gain) : None = pas d'avis
+    gain_hopeless_reason: str | None = None
+    existing_failure_category: str | None = None
+    # La sonde de CE scan a réussi (fichier modifié ou jamais sondé)
+    fresh_probe_ok: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +104,8 @@ class Decision:
     status: MediaStatus
     reason: str
     rule_changed: bool = False
+    # Nouvelle série de tentatives (compteurs et stratégies remis à zéro)
+    reset_series: bool = False
 
 
 def decide_status(facts: FileFacts) -> Decision:
@@ -128,18 +145,53 @@ def decide_status(facts: FileFacts) -> Decision:
                 )
 
     # Pas de tag : jamais traité par cette app (ou tag illisible)
-    if facts.existing_status in (MediaStatus.SKIPPED_NO_GAIN, MediaStatus.FAILED):
-        if facts.existing_applied_hash == facts.rule_hash:
-            # skipped_no_gain : marqué traité, jamais retenté sans changement (§5.5.7)
-            # failed avec retries épuisés : plus repris automatiquement (§5.2)
-            if facts.existing_status is MediaStatus.SKIPPED_NO_GAIN:
-                return Decision(MediaStatus.SKIPPED_NO_GAIN, "gain insuffisant (déjà évalué)")
-            if facts.existing_retry_count > facts.max_retries:
-                return Decision(MediaStatus.FAILED, "échecs répétés : ne sera plus retenté")
-        else:
+    if facts.existing_status is MediaStatus.FAILED:
+        # Échec DÉFINITIF (tous les replis épuisés) : plus jamais relancé
+        # automatiquement tant que ni le fichier ni la règle ne changent.
+        # L'ancienne logique le remettait en file à chaque scan (règle jamais
+        # mémorisée sur échec) : jusqu'à 161 tentatives du même épisode.
+        if facts.file_changed:
             return Decision(
-                MediaStatus.QUEUED, "règle modifiée : nouvelle tentative", rule_changed=True
+                MediaStatus.QUEUED, "fichier modifié depuis l'échec : nouvelle tentative",
+                reset_series=True,
             )
+        if facts.existing_applied_hash is not None and facts.existing_applied_hash != facts.rule_hash:
+            return Decision(
+                MediaStatus.QUEUED, "règle modifiée : nouvelle tentative",
+                rule_changed=True, reset_series=True,
+            )
+        if facts.existing_failure_category == FailureCategory.NO_RULE.value or (
+            facts.existing_failure_category == FailureCategory.SOURCE_UNREADABLE.value
+            and facts.fresh_probe_ok
+        ):
+            # Règle désormais présente, ou source illisible que ce scan vient
+            # de sonder avec succès : la situation a réellement changé
+            return Decision(
+                MediaStatus.QUEUED, "source de nouveau exploitable : nouvelle tentative",
+                reset_series=True,
+            )
+        return Decision(MediaStatus.FAILED, "échec définitif : relance manuelle requise")
+
+    if facts.existing_status is MediaStatus.SKIPPED_NO_GAIN:
+        if facts.existing_applied_hash == facts.rule_hash and not facts.file_changed:
+            # skipped_no_gain : marqué traité, jamais retenté sans changement (§5.5.7)
+            return Decision(MediaStatus.SKIPPED_NO_GAIN, "gain insuffisant (déjà évalué)")
+        if facts.gain_hopeless_reason is not None and not facts.forced:
+            return Decision(
+                MediaStatus.SKIPPED_NO_GAIN,
+                f"gain prévu insuffisant : {facts.gain_hopeless_reason}",
+            )
+        return Decision(
+            MediaStatus.QUEUED, "règle ou fichier modifié : nouvelle évaluation",
+            rule_changed=facts.existing_applied_hash != facts.rule_hash, reset_series=True,
+        )
+
+    # Pré-vol dès le scan : inutile d'occuper la file (et le GPU) avec un
+    # fichier dont le bitrate est déjà sous la cible
+    if facts.gain_hopeless_reason is not None and not facts.forced:
+        return Decision(
+            MediaStatus.SKIPPED_NO_GAIN, f"gain prévu insuffisant : {facts.gain_hopeless_reason}"
+        )
 
     # DONE en base sans tag dans le fichier : le fichier a été remplacé/modifié
     # hors de l'app, ou dry-run précédent → re-queue légitime.
@@ -338,6 +390,15 @@ async def scan_library(
         date_ok = library.date_filter_after is None or added > library.date_filter_after
 
         mf = by_path.get(path)
+        file_changed = (
+            mf is not None
+            and mf.size_bytes is not None
+            and mf.mtime is not None
+            and (
+                mf.size_bytes != st.st_size
+                or abs(mf.mtime.timestamp() - st.st_mtime) >= 1.0
+            )
+        )
         unchanged = (
             mf is not None
             and mf.size_bytes == st.st_size
@@ -365,6 +426,7 @@ async def scan_library(
                 mf.ctime = ctime
                 mf.status = MediaStatus.FAILED
                 mf.last_error = f"sonde ffprobe impossible : {exc}"
+                mf.failure_category = FailureCategory.SOURCE_UNREADABLE.value
                 continue
             if mf is None:
                 mf = MediaFile(library_id=library.id, path=path)
@@ -386,6 +448,7 @@ async def scan_library(
         )
         rule_hash: str | None = None
         target_kbps: int | None = None
+        hopeless_reason: str | None = None
         if probe.resolution_bucket is not None:
             try:
                 resolved = resolve_rule(
@@ -401,6 +464,19 @@ async def scan_library(
                 target_kbps = resolved.target_kbps
             except NoRuleError:
                 rule_hash = None
+        if target_kbps is not None and config.preflight_gain_check:
+            prediction = predict_gain(
+                src_video_kbps=probe.video_bitrate_kbps,
+                size_bytes=st.st_size,
+                duration_s=probe.duration_s,
+                target_kbps=target_kbps,
+                min_gain_percent=float(library.min_gain_percent),
+                # Bitrate seulement estimable : la durée conteneur peut être
+                # fausse, le pré-vol du worker mesure la durée réelle
+                allow_estimated=False,
+            )
+            if prediction.hopeless:
+                hopeless_reason = prediction.reason
 
         decision = decide_status(
             FileFacts(
@@ -412,9 +488,14 @@ async def scan_library(
                 existing_applied_hash=mf.applied_rule_hash,
                 existing_retry_count=mf.retry_count,
                 max_retries=config.max_retries,
+                file_changed=file_changed,
+                forced=mf.manual_rank == 0,
+                gain_hopeless_reason=hopeless_reason,
+                existing_failure_category=mf.failure_category,
+                fresh_probe_ok=not unchanged,
             )
         )
-        _apply_decision(mf, decision, plan, result)
+        _apply_decision(mf, decision, plan, result, rule_hash=rule_hash)
 
         if target_kbps is not None:
             mf.estimated_gain_bytes = estimate_gain_bytes(
@@ -433,12 +514,13 @@ async def scan_library(
 
     logger.info(
         "Scan %s : %d fichiers, %d nouveaux, %d en queue (%d re-queue config), "
-        "%d skipped_policy, %d hors date, %d supprimés",
+        "%d sans gain prévu, %d skipped_policy, %d hors date, %d supprimés",
         library.name,
         result.scanned,
         result.new,
         result.queued,
         result.requeued_rule_change,
+        result.skipped_no_gain_predicted,
         result.skipped_policy,
         result.ignored_date,
         result.removed,
@@ -487,25 +569,50 @@ def _apply_probe(
 
 
 def _apply_decision(
-    mf: MediaFile, decision: Decision, plan: TreatmentPlan, result: ScanResult
+    mf: MediaFile,
+    decision: Decision,
+    plan: TreatmentPlan,
+    result: ScanResult,
+    *,
+    rule_hash: str | None = None,
 ) -> None:
     previous = mf.status
     mf.status = decision.status
+    if decision.reset_series or decision.rule_changed:
+        mf.retry_count = 0
+        mf.attempt_count = 0
+        mf.strategies_tried = []
+        mf.next_strategy = None
+        mf.next_attempt_at = None
+        mf.failure_category = None
     if decision.status is MediaStatus.QUEUED:
         result.queued += 1
         if decision.rule_changed:
             result.requeued_rule_change += 1
-            mf.retry_count = 0
-            mf.next_attempt_at = None
-        mf.last_error = None
+        elif previous is MediaStatus.FAILED:
+            result.requeued_failed_changed += 1
+        # Fichier déjà en file au milieu d'une série de replis : la dernière
+        # erreur reste affichée jusqu'à la prochaine tentative
+        if previous is not MediaStatus.QUEUED or decision.reset_series or decision.rule_changed:
+            mf.last_error = None
     elif decision.status is MediaStatus.SKIPPED_POLICY:
         result.skipped_policy += 1
         mf.last_error = plan.reason
+    elif decision.status is MediaStatus.SKIPPED_NO_GAIN:
+        if decision.reason.startswith("gain prévu insuffisant"):
+            if previous is not MediaStatus.SKIPPED_NO_GAIN:
+                result.skipped_no_gain_predicted += 1
+            mf.last_error = decision.reason
+            # Évalué avec cette règle : plus de réévaluation tant qu'elle ne
+            # change pas (y compris après une règle modifiée toujours hors de portée)
+            mf.applied_rule_hash = rule_hash
     elif decision.status is MediaStatus.IGNORED and previous is not MediaStatus.IGNORED:
         result.ignored_date += 1
         mf.last_error = decision.reason
     elif decision.status is MediaStatus.FAILED and previous is not MediaStatus.FAILED:
         mf.last_error = decision.reason
+        if decision.reason.startswith("aucune règle"):
+            mf.failure_category = FailureCategory.NO_RULE.value
 
 
 __all__ = [

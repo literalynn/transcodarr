@@ -246,6 +246,18 @@ class MediaFile(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
+    # --- Suivi des échecs et replis (migration 0004) --------------------------
+    # Catégorie du dernier échec (core/failures.py), NULL si aucun
+    failure_category: Mapped[str | None] = mapped_column(Text)
+    # Tentatives de la série en cours (remis à 0 : succès, relance, règle changée)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # Stratégies déjà tentées dans la série en cours (core/strategy.py)
+    strategies_tried: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    )
+    # Stratégie de la prochaine tentative (NULL = standard)
+    next_strategy: Mapped[str | None] = mapped_column(Text)
+
     library: Mapped[Library] = relationship(back_populates="media_files")
     jobs: Mapped[list[Job]] = relationship(
         back_populates="media_file", cascade="all, delete-orphan"
@@ -262,6 +274,7 @@ class Job(Base):
         Index("ix_jobs_state", "state"),
         Index("ix_jobs_finished", text("finished_at DESC")),
         Index("ix_jobs_library", "library_id"),
+        Index("ix_jobs_failure_category", "failure_category"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -317,6 +330,17 @@ class Job(Base):
     log_path: Mapped[str | None] = mapped_column(Text)
     log_tail: Mapped[str | None] = mapped_column(Text)
     validation_report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    # --- Diagnostic (migration 0004) --------------------------------------------
+    # N° de tentative dans la série du fichier (1 = premier essai)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    # Stratégie utilisée (standard / tolerant / safe_streams / alt_api / preflight)
+    strategy: Mapped[str | None] = mapped_column(Text)
+    failure_category: Mapped[str | None] = mapped_column(Text)
+    # Lignes d'erreur significatives (log FFmpeg filtré, stderr de validation)
+    failure_detail: Mapped[str | None] = mapped_column(Text)
+    # Pré-vol, plan de pistes, décision de repli
+    diagnostics: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     media_file: Mapped[MediaFile] = relationship(back_populates="jobs")
     progress_snapshots: Mapped[list[JobProgressSnapshot]] = relationship(

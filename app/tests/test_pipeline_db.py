@@ -77,7 +77,7 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
     from sqlalchemy import select
 
     from transcoder.core.capabilities import Capabilities, EncoderTest, GpuCapability
-    from transcoder.core.cmd_builder import BuildParams
+    from transcoder.core.cmd_builder import BuildParams, input_flags, stream_mapping_args
     from transcoder.core.dovi import DvCapabilities
     from transcoder.core.queue import QueueManager
     from transcoder.core.rules import build_transcoder_tag
@@ -132,6 +132,9 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
         max_retries=2,
         early_abort_no_gain=False,  # mire courte : la projection serait bruitée
         progress_snapshot_interval_s=1,
+        preflight_gain_check=True,
+        preflight_decode_check=True,
+        auto_fallback=True,
         jellyfin_url=None,
         jellyfin_api_key=None,
     )
@@ -228,13 +231,14 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
         )
 
         def software_cmd(params: BuildParams) -> list[str]:
-            # Même squelette §5.3 que le builder, encodeur logiciel
+            # Même squelette §5.3 que le builder (plan de pistes, options
+            # d'entrée de la stratégie), encodeur logiciel
             return [
                 params.ffmpeg_path, "-hide_banner", "-nostdin", "-y",
+                *input_flags(params.strategy, params.input_format),
                 "-i", params.src_path,
-                "-map", "0", "-map", "-0:v", "-map", "0:v:0",
-                "-c", "copy",
-                "-c:v", "libx265", "-preset", "ultrafast",
+                *stream_mapping_args(params.stream_plan, "libx265"),
+                "-preset:v", "ultrafast",
                 "-b:v", f"{params.rule.target_kbps}k",
                 "-maxrate", f"{params.rule.max_kbps}k",
                 "-bufsize", f"{params.rule.bufsize_kbps}k",

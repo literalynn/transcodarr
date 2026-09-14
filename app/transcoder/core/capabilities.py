@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import glob
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -50,10 +51,20 @@ class GpuCapability:
     fell_back_to_vaapi: bool
     encoders: dict[str, EncoderTest] = field(default_factory=dict)
     p5_zero_copy: bool = False
+    # API alternative testée sur le même GPU (QSV ↔ VAAPI) : cible de la
+    # stratégie de repli alt_api quand l'encodeur principal échoue
+    alt_api: GpuApi | None = None
+    alt_encoders: dict[str, EncoderTest] = field(default_factory=dict)
 
     def supports(self, codec: Codec) -> bool:
         enc = f"{codec.value}_{self.effective_api.value}"
         test = self.encoders.get(enc)
+        return test is not None and test.ok
+
+    def supports_alt(self, codec: Codec) -> bool:
+        if self.alt_api is None:
+            return False
+        test = self.alt_encoders.get(f"{codec.value}_{self.alt_api.value}")
         return test is not None and test.ok
 
     def as_dict(self) -> dict[str, Any]:
@@ -68,6 +79,10 @@ class GpuCapability:
                 name: {"ok": t.ok, "error": t.error} for name, t in self.encoders.items()
             },
             "p5_zero_copy": self.p5_zero_copy,
+            "alt_api": self.alt_api.value if self.alt_api else None,
+            "alt_encoders": {
+                name: {"ok": t.ok, "error": t.error} for name, t in self.alt_encoders.items()
+            },
         }
 
 
@@ -83,6 +98,8 @@ class Capabilities:
     dovi_tool_ok: bool
     mkvpropedit_ok: bool
     gpus: list[GpuCapability] = field(default_factory=list)
+    # mkvmerge (même dossier que mkvpropedit) : stratégie mkvmerge_mux
+    mkvmerge_ok: bool = False
 
     @property
     def dv_caps(self) -> DvCapabilities:
@@ -100,6 +117,7 @@ class Capabilities:
             "libplacebo_dv": self.libplacebo_dv,
             "dovi_tool_ok": self.dovi_tool_ok,
             "mkvpropedit_ok": self.mkvpropedit_ok,
+            "mkvmerge_ok": self.mkvmerge_ok,
             "gpus": [g.as_dict() for g in self.gpus],
         }
 
@@ -150,7 +168,7 @@ def _hw_args(api: GpuApi, drm_node: str) -> list[str]:
 
 
 async def run_encoder_test(
-    ffmpeg_path: str, *, codec: Codec, api: GpuApi, drm_node: str
+    ffmpeg_path: str, *, codec: Codec, api: GpuApi, drm_node: str, short: bool = False
 ) -> EncoderTest:
     """Encode 5 s de mire (testsrc2) sur le GPU — le test du bouton UI (§9.5.4)."""
     encoder = f"{codec.value}_{api.value}"
@@ -163,7 +181,7 @@ async def run_encoder_test(
             "-v",
             "error",
             *_hw_args(api, drm_node),
-            *_MIRE_INPUT,
+            *(_MIRE_SHORT if short else _MIRE_INPUT),
             *vf,
             "-c:v",
             encoder,
@@ -264,6 +282,24 @@ async def probe_gpu(ffmpeg_path: str, gpu: GpuConfig, *, libplacebo: bool) -> Gp
             cap.effective_api = GpuApi.VAAPI
             cap.fell_back_to_vaapi = True
 
+    # API alternative (mire courte) : QSV → VAAPI, ou VAAPI → QSV si QSV n'a
+    # pas déjà échoué au test principal
+    alternate = GpuApi.VAAPI if cap.effective_api is GpuApi.QSV else GpuApi.QSV
+    if not (alternate is GpuApi.QSV and cap.fell_back_to_vaapi):
+        for codec in (Codec.HEVC, Codec.AV1):
+            test = await run_encoder_test(
+                ffmpeg_path, codec=codec, api=alternate, drm_node=gpu.drm_node, short=True
+            )
+            cap.alt_encoders[test.encoder] = test
+        if any(t.ok for t in cap.alt_encoders.values()):
+            cap.alt_api = alternate
+            logger.info(
+                "GPU %s : API alternative %s disponible pour les replis (%s)",
+                gpu.name,
+                alternate.value,
+                ", ".join(n for n, t in cap.alt_encoders.items() if t.ok),
+            )
+
     if libplacebo and cap.encoders.get(f"hevc_{cap.effective_api.value}", EncoderTest("", False)).ok:
         cap.p5_zero_copy = await check_p5_zero_copy(
             ffmpeg_path, api=cap.effective_api, drm_node=gpu.drm_node
@@ -306,6 +342,7 @@ async def detect_capabilities(
 
     dovi_code, _ = await _run([dovi_tool_path, "--version"], timeout=15)
     mkv_code, _ = await _run([mkvpropedit_path, "--version"], timeout=15)
+    merge_code, _ = await _run([mkvmerge_path_for(mkvpropedit_path), "--version"], timeout=15)
 
     caps = Capabilities(
         ffmpeg_ok=ffmpeg_ok,
@@ -315,6 +352,7 @@ async def detect_capabilities(
         libplacebo_dv=libplacebo_dv,
         dovi_tool_ok=dovi_code == 0,
         mkvpropedit_ok=mkv_code == 0,
+        mkvmerge_ok=merge_code == 0,
     )
     if not ffmpeg_ok:
         logger.error("FFmpeg introuvable (%s) : aucun encodage possible", ffmpeg_path)
@@ -323,6 +361,12 @@ async def detect_capabilities(
     for gpu in gpus:
         caps.gpus.append(await probe_gpu(ffmpeg_path, gpu, libplacebo=libplacebo))
     return caps
+
+
+def mkvmerge_path_for(mkvpropedit_path: str) -> str:
+    """mkvmerge est livré avec mkvpropedit (mkvtoolnix) : même dossier."""
+    directory = os.path.dirname(mkvpropedit_path)
+    return os.path.join(directory, "mkvmerge") if directory else "mkvmerge"
 
 
 def detect_drm_nodes() -> list[str]:

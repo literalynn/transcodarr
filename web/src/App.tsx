@@ -1,11 +1,9 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { Dashboard } from "@/pages/Dashboard";
-import { HistoryPage } from "@/pages/HistoryPage";
 import { LibrariesPage } from "@/pages/LibrariesPage";
 import { QueuePage } from "@/pages/QueuePage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { StatsPage } from "@/pages/StatsPage";
 
 export function App() {
   return (
@@ -13,10 +11,12 @@ export function App() {
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="queue" element={<QueuePage />} />
-        <Route path="history" element={<HistoryPage />} />
-        <Route path="stats" element={<StatsPage />} />
+        {/* Anciennes pages fusionnées : liens et favoris redirigés */}
+        <Route path="history" element={<Navigate to="/queue?tab=history" replace />} />
+        <Route path="stats" element={<Navigate to="/" replace />} />
         <Route path="libraries" element={<LibrariesPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

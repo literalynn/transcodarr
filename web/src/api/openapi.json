@@ -789,6 +789,87 @@
       }
      },
      {
+      "name": "outcome",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "pattern": "^(success|recovered|failed|no_gain|cancelled|active|finished)$"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Outcome"
+      }
+     },
+     {
+      "name": "failure_category",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Failure Category"
+      }
+     },
+     {
+      "name": "strategy",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Strategy"
+      }
+     },
+     {
+      "name": "media_file_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media File Id"
+      }
+     },
+     {
+      "name": "dry_run",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Dry Run"
+      }
+     },
+     {
       "name": "codec",
       "in": "query",
       "required": false,
@@ -852,6 +933,17 @@
         }
        ],
        "title": "Search"
+      }
+     },
+     {
+      "name": "sort",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "pattern": "^(recent|duration|gain|size|attempt)$",
+       "default": "recent",
+       "title": "Sort"
       }
      },
      {
@@ -1121,6 +1213,22 @@
       }
      },
      {
+      "name": "failure_category",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Failure Category"
+      }
+     },
+     {
       "name": "search",
       "in": "query",
       "required": false,
@@ -1142,9 +1250,19 @@
       "required": false,
       "schema": {
        "type": "string",
-       "pattern": "^(queue|path|size|mtime)$",
+       "pattern": "^(queue|path|size|mtime|recent)$",
        "default": "queue",
        "title": "Order"
+      }
+     },
+     {
+      "name": "with_job_count",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "With Job Count"
       }
      },
      {
@@ -1195,6 +1313,48 @@
     }
    }
   },
+  "/api/v1/files/retry-failed": {
+   "post": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Retry Failed",
+    "description": "Relance les échecs définitifs avec toutes les méthodes actuelles\n(plan de pistes, pré-vol, replis automatiques) : nouvelle série complète.",
+    "operationId": "retry_failed_api_v1_files_retry_failed_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RetryFailedRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ActionResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/files/requeue-dry-run": {
    "post": {
     "tags": [
@@ -1228,6 +1388,49 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/ActionResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/files/{file_id}": {
+   "get": {
+    "tags": [
+     "files"
+    ],
+    "summary": "File Detail",
+    "description": "Fichier + historique complet de ses tentatives (plus récente d'abord).",
+    "operationId": "file_detail_api_v1_files__file_id__get",
+    "parameters": [
+     {
+      "name": "file_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "File Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MediaFileDetail"
         }
        }
       }
@@ -1427,7 +1630,7 @@
      "stats"
     ],
     "summary": "Savings Over Time",
-    "description": "Courbe cumulative de l'espace récupéré (§7.4).",
+    "description": "Espace récupéré par créneau et cumulé sur la période (§7.4).",
     "operationId": "savings_over_time_api_v1_stats_savings_over_time_get",
     "parameters": [
      {
@@ -1435,10 +1638,16 @@
       "in": "query",
       "required": false,
       "schema": {
-       "type": "integer",
-       "maximum": 730,
-       "minimum": 1,
-       "default": 90,
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
        "title": "Days"
       }
      }
@@ -1449,11 +1658,8 @@
       "content": {
        "application/json": {
         "schema": {
-         "type": "array",
-         "items": {
-          "type": "object",
-          "additionalProperties": true
-         },
+         "type": "object",
+         "additionalProperties": true,
          "title": "Response Savings Over Time Api V1 Stats Savings Over Time Get"
         }
        }
@@ -1504,18 +1710,48 @@
     "summary": "Gain By Bucket",
     "description": "Gain moyen par BUCKET de résolution — pas par résolution brute : un\n1920x804 cinémascope est du 1080p, sinon chaque crop créerait son\npropre groupe d'un seul fichier.",
     "operationId": "gain_by_bucket_api_v1_stats_gain_by_bucket_get",
+    "parameters": [
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Days"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "items": {
-          "additionalProperties": true,
-          "type": "object"
-         },
          "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
          "title": "Response Gain By Bucket Api V1 Stats Gain By Bucket Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -1529,6 +1765,7 @@
      "stats"
     ],
     "summary": "Throughput",
+    "description": "Fichiers réencodés avec succès par créneau, temps GPU et débit moyen.",
     "operationId": "throughput_api_v1_stats_throughput_get",
     "parameters": [
      {
@@ -1536,10 +1773,16 @@
       "in": "query",
       "required": false,
       "schema": {
-       "type": "integer",
-       "maximum": 365,
-       "minimum": 1,
-       "default": 30,
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
        "title": "Days"
       }
      }
@@ -1627,16 +1870,101 @@
      "stats"
     ],
     "summary": "Failures",
+    "description": "Échecs par catégorie : tentatives (période) et fichiers en échec définitif.",
     "operationId": "failures_api_v1_stats_failures_get",
+    "parameters": [
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Days"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Failures Api V1 Stats Failures Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/stats/reliability": {
+   "get": {
+    "tags": [
+     "stats"
+    ],
+    "summary": "Reliability",
+    "description": "Fiabilité : tentatives vs réussites, premier essai, replis, temps perdu.\n\n« Tentative » = job ayant réellement lancé un encodage (les évaluations\ndu pré-vol, sans GPU, sont comptées à part).",
+    "operationId": "reliability_api_v1_stats_reliability_get",
+    "parameters": [
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Days"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Reliability Api V1 Stats Reliability Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -1957,6 +2285,28 @@
        }
       ],
       "title": "Eta S"
+     },
+     "strategy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strategy"
+     },
+     "attempt": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attempt"
      }
     },
     "type": "object",
@@ -2698,6 +3048,44 @@
       ],
       "title": "Trashed Path"
      },
+     "attempt": {
+      "type": "integer",
+      "title": "Attempt",
+      "default": 1
+     },
+     "strategy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strategy"
+     },
+     "failure_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Category"
+     },
+     "failure_detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Detail"
+     },
      "ffmpeg_cmd": {
       "anyOf": [
        {
@@ -2745,6 +3133,18 @@
        }
       ],
       "title": "Validation Report"
+     },
+     "diagnostics": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Diagnostics"
      }
     },
     "type": "object",
@@ -3057,6 +3457,44 @@
        }
       ],
       "title": "Trashed Path"
+     },
+     "attempt": {
+      "type": "integer",
+      "title": "Attempt",
+      "default": 1
+     },
+     "strategy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strategy"
+     },
+     "failure_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Category"
+     },
+     "failure_detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Detail"
      }
     },
     "type": "object",
@@ -3539,6 +3977,335 @@
     "type": "object",
     "title": "LibraryPatch"
    },
+   "MediaFileDetail": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "library_id": {
+      "type": "integer",
+      "title": "Library Id"
+     },
+     "path": {
+      "type": "string",
+      "title": "Path"
+     },
+     "size_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Size Bytes"
+     },
+     "mtime": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mtime"
+     },
+     "status": {
+      "$ref": "#/components/schemas/MediaStatus"
+     },
+     "video_codec": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Video Codec"
+     },
+     "width": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Width"
+     },
+     "height": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Height"
+     },
+     "resolution_bucket": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ResolutionBucket"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "video_bitrate_kbps": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Video Bitrate Kbps"
+     },
+     "is_hdr": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Is Hdr"
+     },
+     "hdr_format": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/HdrFormat"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "dv_profile": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dv Profile"
+     },
+     "dv_bl_compat_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dv Bl Compat Id"
+     },
+     "estimated_gain_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Estimated Gain Bytes"
+     },
+     "manual_rank": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Manual Rank"
+     },
+     "retry_count": {
+      "type": "integer",
+      "title": "Retry Count"
+     },
+     "last_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Error"
+     },
+     "transcoder_tag": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Transcoder Tag"
+     },
+     "applied_rule_hash": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Applied Rule Hash"
+     },
+     "failure_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Category"
+     },
+     "attempt_count": {
+      "type": "integer",
+      "title": "Attempt Count",
+      "default": 0
+     },
+     "strategies_tried": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Strategies Tried"
+     },
+     "next_strategy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Strategy"
+     },
+     "duration_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Duration S"
+     },
+     "next_attempt_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Attempt At"
+     },
+     "job_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Job Count"
+     },
+     "jobs": {
+      "items": {
+       "$ref": "#/components/schemas/JobOut"
+      },
+      "type": "array",
+      "title": "Jobs"
+     },
+     "audio_streams": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Audio Streams"
+     },
+     "subtitle_streams": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Subtitle Streams"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "library_id",
+     "path",
+     "size_bytes",
+     "mtime",
+     "status",
+     "video_codec",
+     "width",
+     "height",
+     "resolution_bucket",
+     "video_bitrate_kbps",
+     "is_hdr",
+     "hdr_format",
+     "dv_profile",
+     "dv_bl_compat_id",
+     "estimated_gain_bytes",
+     "manual_rank",
+     "retry_count",
+     "last_error",
+     "transcoder_tag",
+     "applied_rule_hash"
+    ],
+    "title": "MediaFileDetail",
+    "description": "Fichier + toutes ses tentatives (suivi des échecs et replis)."
+   },
    "MediaFileOut": {
     "properties": {
      "id": {
@@ -3734,6 +4501,74 @@
        }
       ],
       "title": "Applied Rule Hash"
+     },
+     "failure_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Category"
+     },
+     "attempt_count": {
+      "type": "integer",
+      "title": "Attempt Count",
+      "default": 0
+     },
+     "strategies_tried": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Strategies Tried"
+     },
+     "next_strategy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Strategy"
+     },
+     "duration_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Duration S"
+     },
+     "next_attempt_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Attempt At"
+     },
+     "job_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Job Count"
      }
     },
     "type": "object",
@@ -3878,6 +4713,49 @@
      "2160p"
     ],
     "title": "ResolutionBucket"
+   },
+   "RetryFailedRequest": {
+    "properties": {
+     "library_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Library Id"
+     },
+     "failure_category": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Failure Category"
+     },
+     "file_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "File Ids"
+     }
+    },
+    "type": "object",
+    "title": "RetryFailedRequest",
+    "description": "Relance des échecs définitifs : tous, par bibliothèque, par catégorie\nou une sélection explicite de fichiers."
    },
    "ScanTriggered": {
     "properties": {

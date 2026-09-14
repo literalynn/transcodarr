@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 
 from transcoder.core.scanner import (
-    Decision,
     FileFacts,
     added_date,
     decide_status,
@@ -151,12 +150,93 @@ def test_failed_requeued_on_rule_change() -> None:
     assert d.status is MediaStatus.QUEUED
 
 
-def test_failed_with_retries_left_requeues() -> None:
+def test_failed_is_terminal_even_with_retries_left() -> None:
+    """Un `failed` est désormais TOUJOURS définitif (les nouveaux essais
+    transitoires restent `queued` avec backoff) : le scan ne le relance plus.
+    Régression de la boucle observée en production (161 tentatives/fichier)."""
     d = decide_status(
         _facts(
             existing_status=MediaStatus.FAILED,
             existing_applied_hash=HASH_OK,
             existing_retry_count=1,
+        )
+    )
+    assert d.status is MediaStatus.FAILED
+
+
+def test_failed_legacy_without_applied_hash_stays_failed() -> None:
+    """Avant la correction, le hash n'était jamais mémorisé sur échec :
+    None ≠ hash courant faisait croire à un changement de règle à chaque scan."""
+    d = decide_status(
+        _facts(existing_status=MediaStatus.FAILED, existing_applied_hash=None)
+    )
+    assert d.status is MediaStatus.FAILED
+
+
+def test_failed_requeued_when_file_changed() -> None:
+    d = decide_status(
+        _facts(
+            existing_status=MediaStatus.FAILED,
+            existing_applied_hash=HASH_OK,
+            file_changed=True,
+        )
+    )
+    assert d.status is MediaStatus.QUEUED
+    assert d.reset_series
+
+
+def test_failed_scan_level_categories_are_reevaluated() -> None:
+    """Règle désormais présente, ou source illisible re-sondée avec succès :
+    réévalués. Une source illisible NON re-sondée reste en échec (sinon
+    une tentative par scan, indéfiniment)."""
+    d = decide_status(
+        _facts(
+            existing_status=MediaStatus.FAILED,
+            existing_applied_hash=HASH_OK,
+            existing_failure_category="no_rule",
+        )
+    )
+    assert d.status is MediaStatus.QUEUED
+    unreadable = dict(
+        existing_status=MediaStatus.FAILED,
+        existing_applied_hash=HASH_OK,
+        existing_failure_category="source_unreadable",
+    )
+    assert decide_status(_facts(**unreadable)).status is MediaStatus.FAILED
+    assert decide_status(_facts(**unreadable, fresh_probe_ok=True)).status is MediaStatus.QUEUED
+    d = decide_status(
+        _facts(
+            existing_status=MediaStatus.FAILED,
+            existing_applied_hash=HASH_OK,
+            existing_failure_category="mux_subtitle",
+        )
+    )
+    assert d.status is MediaStatus.FAILED
+
+
+def test_hopeless_gain_is_not_queued() -> None:
+    d = decide_status(_facts(gain_hopeless_reason="bitrate 1400 kbps < cible 3000 kbps"))
+    assert d.status is MediaStatus.SKIPPED_NO_GAIN
+    assert "gain prévu insuffisant" in d.reason
+
+
+def test_forced_file_bypasses_gain_prediction() -> None:
+    d = decide_status(
+        _facts(
+            existing_status=MediaStatus.QUEUED,
+            gain_hopeless_reason="bitrate trop bas",
+            forced=True,
+        )
+    )
+    assert d.status is MediaStatus.QUEUED
+
+
+def test_skipped_no_gain_same_rule_but_file_changed_is_reevaluated() -> None:
+    d = decide_status(
+        _facts(
+            existing_status=MediaStatus.SKIPPED_NO_GAIN,
+            existing_applied_hash=HASH_OK,
+            file_changed=True,
         )
     )
     assert d.status is MediaStatus.QUEUED

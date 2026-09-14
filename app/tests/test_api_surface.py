@@ -41,6 +41,8 @@ EXPECTED_ENDPOINTS: list[tuple[str, str]] = [
     ("post", "/api/v1/queue/reorder"),
     ("post", "/api/v1/queue/recover"),
     ("post", "/api/v1/files/requeue-dry-run"),
+    ("post", "/api/v1/files/retry-failed"),
+    ("get", "/api/v1/files/{file_id}"),
     ("get", "/api/v1/jobs"),
     ("get", "/api/v1/jobs/{job_id}"),
     ("get", "/api/v1/jobs/{job_id}/log"),
@@ -58,6 +60,7 @@ EXPECTED_ENDPOINTS: list[tuple[str, str]] = [
     ("get", "/api/v1/stats/throughput"),
     ("get", "/api/v1/stats/top-remaining"),
     ("get", "/api/v1/stats/failures"),
+    ("get", "/api/v1/stats/reliability"),
     ("get", "/api/v1/stats/progress-by-library"),
     ("get", "/api/v1/settings"),
     ("patch", "/api/v1/settings"),
@@ -112,3 +115,13 @@ def test_spa_fallback_serves_index(tmp_path: "Path") -> None:
     deep = client.get("/queue")
     assert deep.status_code == 200
     assert "SPA" in deep.text
+
+
+def test_jobs_list_exposes_diagnostic_filters(openapi: dict[str, Any]) -> None:
+    params = {p["name"] for p in openapi["paths"]["/api/v1/jobs"]["get"].get("parameters", [])}
+    assert {"outcome", "failure_category", "strategy", "media_file_id", "sort"} <= params
+
+
+def test_job_schema_carries_diagnostics(openapi: dict[str, Any]) -> None:
+    job = openapi["components"]["schemas"]["JobDetail"]["properties"]
+    assert {"attempt", "strategy", "failure_category", "failure_detail", "diagnostics"} <= set(job)

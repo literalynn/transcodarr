@@ -12,7 +12,12 @@ Choix documentés :
   (libplacebo sort des frames p010le en RAM, l'encodeur les reprend) ;
 - MDCV/MaxCLL : passthrough encodeur quand la source les porte (side data),
   et injection conteneur Matroska en post-encode (module replace) sinon —
-  arbitrage 1 du plan validé.
+  arbitrage 1 du plan validé ;
+- mapping EXPLICITE piste par piste depuis le plan de pistes (stream_plan) :
+  vidéo en premier, conversions (SubRip, FLAC…) et exclusions décidées en
+  amont — plus jamais de `-map 0 -c copy` aveugle qui fait échouer le mux ;
+- options d'entrée selon la stratégie (strategy.py) : horodatages
+  régénérés pour les conteneurs anciens, décodage tolérant en repli.
 """
 
 from __future__ import annotations
@@ -20,26 +25,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from transcoder.core.dovi import TreatmentAction, TreatmentPlan
-from transcoder.core.probe import MediaProbe
+from transcoder.core.probe import MediaProbe, is_legacy_timestamp_format
 from transcoder.core.rules import ResolvedRule, build_transcoder_tag
+from transcoder.core.stream_plan import StreamAction, StreamPlan, plan_streams
+from transcoder.core.strategy import Strategy
 from transcoder.enums import Codec, Container, GpuApi
 
 
 class BuildError(ValueError):
     """Le plan de traitement ne permet pas de construire une commande."""
-
-
-def unmappable_stream_indexes(probe: MediaProbe) -> tuple[int, ...]:
-    """Index des pistes audio/sous-titres au codec INCONNU : impossibles à
-    copier (le muxer refuse d'écrire leur en-tête → tout le job échoue,
-    cas classique des MKV de fansub avec une piste corrompue)."""
-    bad: list[int] = []
-    for stream in (*probe.audio_streams, *probe.subtitle_streams):
-        codec = stream.get("codec")
-        index = stream.get("index")
-        if isinstance(index, int) and (not codec or codec == "none"):
-            bad.append(index)
-    return tuple(sorted(bad))
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,11 +49,14 @@ class BuildParams:
     container: Container
     plan: TreatmentPlan
     src_bit_depth: int | None
+    # Sort de chaque piste (copie / conversion / exclusion), vidéo comprise
+    stream_plan: StreamPlan
     # Chaîne zéro-copie Vulkan→QSV/VAAPI validée au démarrage (arbitrage 6).
     # False = repli logiciel (libplacebo sort en RAM, plus lent mais sûr).
     p5_zero_copy: bool = False
-    # Pistes au codec inconnu, exclues du mapping (voir unmappable_stream_indexes)
-    exclude_stream_indexes: tuple[int, ...] = ()
+    strategy: Strategy = Strategy.STANDARD
+    # format_name ffprobe de la source (« avi », « mpegts »…)
+    input_format: str | None = None
 
 
 _ENCODERS: dict[tuple[Codec, GpuApi], str] = {
@@ -205,6 +202,72 @@ def _video_filter(params: BuildParams) -> list[str]:
     return []
 
 
+# Tags de statistiques mkvmerge recopiés par -map_metadata depuis la piste
+# vidéo SOURCE : périmés après réencodage (purgés, recalculés post-encode)
+_STALE_STAT_TAGS = (
+    "BPS", "BPS-eng",
+    "NUMBER_OF_BYTES", "NUMBER_OF_BYTES-eng",
+    "NUMBER_OF_FRAMES", "NUMBER_OF_FRAMES-eng",
+    "DURATION", "DURATION-eng",
+    "_STATISTICS_WRITING_APP", "_STATISTICS_WRITING_DATE_UTC", "_STATISTICS_TAGS",
+)
+
+
+def _needs_genpts(input_format: str | None) -> bool:
+    """Horodatages souvent absents ou approximatifs (DivX/XviD en AVI à
+    B-frames empaquetées, TS/VOB, WMV…) : +genpts d'office."""
+    return is_legacy_timestamp_format(input_format)
+
+
+def _probe_flags(input_format: str | None) -> list[str]:
+    """Analyse d'entrée agrandie UNIQUEMENT pour les conteneurs où les pistes
+    ne s'identifient qu'en lisant des paquets (TS/VOB/AVI…).
+
+    Constaté en production (jellyfin-ffmpeg 7.1) : sur un MKV, même 20M
+    suffisent à faire recevoir au muxer un paquet de sous-titres tardif en
+    premier ; FFmpeg « corrige » alors tous les suivants (Non-monotonic DTS)
+    et déplace des milliers d'événements ASS. En Matroska/MP4, le codec de
+    chaque piste vient de l'en-tête : l'analyse par défaut suffit."""
+    if is_legacy_timestamp_format(input_format):
+        return ["-analyzeduration", "200M", "-probesize", "200M"]
+    return []
+
+
+def input_flags(strategy: Strategy, input_format: str | None) -> list[str]:
+    """Options d'entrée (avant -i) selon la stratégie et le conteneur source."""
+    flags: list[str] = []
+    if strategy.tolerant_input:
+        # Horodatages régénérés, paquets corrompus écartés, erreurs de
+        # décodage ignorées : la sortie est un flux PROPRE réencodé depuis
+        # ce que le décodeur a pu reconstruire (validé ensuite comme toujours)
+        flags += [
+            "-fflags", "+genpts+discardcorrupt",
+            "-err_detect", "ignore_err",
+            "-max_error_rate", "1.0",
+        ]
+    elif _needs_genpts(input_format):
+        flags += ["-fflags", "+genpts"]
+    return flags
+
+
+def stream_mapping_args(plan: StreamPlan, encoder: str) -> list[str]:
+    """`-map` explicites (vidéo d'abord) + codec par piste de SORTIE."""
+    mapped = plan.mapped
+    if not mapped or mapped[0].action is not StreamAction.ENCODE:
+        raise BuildError("aucune piste vidéo à réencoder dans la source")
+    args: list[str] = []
+    for decision in mapped:
+        args += ["-map", f"0:{decision.index}"]
+    for out_index, decision in enumerate(mapped):
+        if decision.action is StreamAction.ENCODE:
+            args += [f"-c:{out_index}", encoder]
+        elif decision.action is StreamAction.CONVERT and decision.target_codec:
+            args += [f"-c:{out_index}", decision.target_codec]
+        else:
+            args += [f"-c:{out_index}", "copy"]
+    return args
+
+
 def build_ffmpeg_cmd(params: BuildParams) -> list[str]:
     """Commande FFmpeg complète (§5.3). Lève BuildError si le plan est SKIP."""
     plan = params.plan
@@ -221,32 +284,21 @@ def build_ffmpeg_cmd(params: BuildParams) -> list[str]:
         "-nostdin",
         "-y",
         *_hw_init(params),
-        # Certaines pistes (fansubs) demandent plus d'analyse pour être
-        # identifiées — sinon « unknown codec » et échec du mux
-        "-analyzeduration", "200M",
-        "-probesize", "200M",
+        *input_flags(params.strategy, params.input_format),
+        *_probe_flags(params.input_format),
         "-i", params.src_path,
-        # Une seule piste vidéo (la première = BL pour un DV P7), tout le
-        # reste — audio, sous-titres, data, attachments — conservé tel quel.
-        "-map", "0",
-        "-map", "-0:v",
-        "-map", "0:v:0",
-    ]
-    # Pistes impossibles à copier (codec inconnu) : exclues explicitement
-    for index in params.exclude_stream_indexes:
-        cmd += ["-map", f"-0:{index}"]
-    cmd += [
-        "-c", "copy",
-        "-c:v", encoder,
+        # Une seule piste vidéo (la première = BL pour un DV P7) ; le reste
+        # suit le plan de pistes : copie, conversion ou exclusion motivée
+        *stream_mapping_args(params.stream_plan, encoder),
     ]
 
     if params.gpu_api is GpuApi.QSV:
-        cmd += ["-preset", "slow"]
+        cmd += ["-preset:v", "slow"]
 
     cmd += [
         "-b:v", f"{params.rule.target_kbps}k",
-        "-maxrate", f"{params.rule.max_kbps}k",
-        "-bufsize", f"{params.rule.bufsize_kbps}k",
+        "-maxrate:v", f"{params.rule.max_kbps}k",
+        "-bufsize:v", f"{params.rule.bufsize_kbps}k",
     ]
 
     if not vf and params.gpu_api is GpuApi.QSV:
@@ -262,18 +314,13 @@ def build_ffmpeg_cmd(params: BuildParams) -> list[str]:
     # vidéo SOURCE (BPS, NUMBER_OF_BYTES…) : périmés après réencodage, ils
     # feraient afficher l'ancien bitrate. Purge (valeur vide = suppression) ;
     # les vraies statistiques sont recalculées post-encode par mkvpropedit.
-    for stale_tag in (
-        "BPS", "BPS-eng",
-        "NUMBER_OF_BYTES", "NUMBER_OF_BYTES-eng",
-        "NUMBER_OF_FRAMES", "NUMBER_OF_FRAMES-eng",
-        "DURATION", "DURATION-eng",
-        "_STATISTICS_WRITING_APP", "_STATISTICS_WRITING_DATE_UTC", "_STATISTICS_TAGS",
-    ):
+    for stale_tag in _STALE_STAT_TAGS:
         cmd += ["-metadata:s:v:0", f"{stale_tag}="]
 
     if params.container is Container.MP4:
-        # MP4 : pas d'attachments, sous-titres texte convertis en mov_text
-        cmd += ["-map", "-0:t", "-c:s", "mov_text", "-movflags", "+faststart"]
+        cmd += ["-movflags", "+faststart"]
+    if params.strategy.tolerant_input:
+        cmd += ["-avoid_negative_ts", "make_zero"]
 
     cmd += [
         "-metadata", f"TRANSCODER_TAG={build_transcoder_tag(params.rule)}",
@@ -297,6 +344,7 @@ def build_cmd_for(
     drm_node: str,
     dst_path: str,
     p5_zero_copy: bool = False,
+    strategy: Strategy = Strategy.STANDARD,
 ) -> list[str]:
     """Raccourci : assemble BuildParams depuis une sonde et construit la commande."""
     return build_ffmpeg_cmd(
@@ -310,7 +358,11 @@ def build_cmd_for(
             container=container,
             plan=plan,
             src_bit_depth=probe.bit_depth,
+            stream_plan=plan_streams(
+                probe.raw.get("streams") or [], container=container, strategy=strategy
+            ),
             p5_zero_copy=p5_zero_copy,
-            exclude_stream_indexes=unmappable_stream_indexes(probe),
+            strategy=strategy,
+            input_format=probe.format_name,
         )
     )

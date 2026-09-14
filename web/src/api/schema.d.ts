@@ -365,6 +365,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/files/retry-failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Failed
+         * @description Relance les échecs définitifs avec toutes les méthodes actuelles
+         *     (plan de pistes, pré-vol, replis automatiques) : nouvelle série complète.
+         */
+        post: operations["retry_failed_api_v1_files_retry_failed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/requeue-dry-run": {
         parameters: {
             query?: never;
@@ -380,6 +401,26 @@ export interface paths {
          *     à utiliser après passage en réel, sans attendre le prochain scan.
          */
         post: operations["requeue_dry_run_api_v1_files_requeue_dry_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/{file_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * File Detail
+         * @description Fichier + historique complet de ses tentatives (plus récente d'abord).
+         */
+        get: operations["file_detail_api_v1_files__file_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -492,7 +533,7 @@ export interface paths {
         };
         /**
          * Savings Over Time
-         * @description Courbe cumulative de l'espace récupéré (§7.4).
+         * @description Espace récupéré par créneau et cumulé sur la période (§7.4).
          */
         get: operations["savings_over_time_api_v1_stats_savings_over_time_get"];
         put?: never;
@@ -552,7 +593,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Throughput */
+        /**
+         * Throughput
+         * @description Fichiers réencodés avec succès par créneau, temps GPU et débit moyen.
+         */
         get: operations["throughput_api_v1_stats_throughput_get"];
         put?: never;
         post?: never;
@@ -589,8 +633,34 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Failures */
+        /**
+         * Failures
+         * @description Échecs par catégorie : tentatives (période) et fichiers en échec définitif.
+         */
         get: operations["failures_api_v1_stats_failures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stats/reliability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reliability
+         * @description Fiabilité : tentatives vs réussites, premier essai, replis, temps perdu.
+         *
+         *     « Tentative » = job ayant réellement lancé un encodage (les évaluations
+         *     du pré-vol, sans GPU, sont comptées à part).
+         */
+        get: operations["reliability_api_v1_stats_reliability_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -750,6 +820,10 @@ export interface components {
             speed?: number | null;
             /** Eta S */
             eta_s?: number | null;
+            /** Strategy */
+            strategy?: string | null;
+            /** Attempt */
+            attempt?: number | null;
         };
         /** BitrateRuleIn */
         BitrateRuleIn: {
@@ -986,6 +1060,17 @@ export interface components {
             error_message: string | null;
             /** Trashed Path */
             trashed_path: string | null;
+            /**
+             * Attempt
+             * @default 1
+             */
+            attempt?: number;
+            /** Strategy */
+            strategy?: string | null;
+            /** Failure Category */
+            failure_category?: string | null;
+            /** Failure Detail */
+            failure_detail?: string | null;
             /** Ffmpeg Cmd */
             ffmpeg_cmd: string[] | null;
             /** Log Tail */
@@ -994,6 +1079,10 @@ export interface components {
             log_path: string | null;
             /** Validation Report */
             validation_report: {
+                [key: string]: unknown;
+            } | null;
+            /** Diagnostics */
+            diagnostics?: {
                 [key: string]: unknown;
             } | null;
         };
@@ -1052,6 +1141,17 @@ export interface components {
             error_message: string | null;
             /** Trashed Path */
             trashed_path: string | null;
+            /**
+             * Attempt
+             * @default 1
+             */
+            attempt?: number;
+            /** Strategy */
+            strategy?: string | null;
+            /** Failure Category */
+            failure_category?: string | null;
+            /** Failure Detail */
+            failure_detail?: string | null;
         };
         /** JobPage */
         JobPage: {
@@ -1192,6 +1292,78 @@ export interface components {
              */
             clear_dry_run?: boolean;
         };
+        /**
+         * MediaFileDetail
+         * @description Fichier + toutes ses tentatives (suivi des échecs et replis).
+         */
+        MediaFileDetail: {
+            /** Id */
+            id: number;
+            /** Library Id */
+            library_id: number;
+            /** Path */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /** Mtime */
+            mtime: string | null;
+            status: components["schemas"]["MediaStatus"];
+            /** Video Codec */
+            video_codec: string | null;
+            /** Width */
+            width: number | null;
+            /** Height */
+            height: number | null;
+            resolution_bucket: components["schemas"]["ResolutionBucket"] | null;
+            /** Video Bitrate Kbps */
+            video_bitrate_kbps: number | null;
+            /** Is Hdr */
+            is_hdr: boolean | null;
+            hdr_format: components["schemas"]["HdrFormat"] | null;
+            /** Dv Profile */
+            dv_profile: number | null;
+            /** Dv Bl Compat Id */
+            dv_bl_compat_id: number | null;
+            /** Estimated Gain Bytes */
+            estimated_gain_bytes: number | null;
+            /** Manual Rank */
+            manual_rank: number | null;
+            /** Retry Count */
+            retry_count: number;
+            /** Last Error */
+            last_error: string | null;
+            /** Transcoder Tag */
+            transcoder_tag: string | null;
+            /** Applied Rule Hash */
+            applied_rule_hash: string | null;
+            /** Failure Category */
+            failure_category?: string | null;
+            /**
+             * Attempt Count
+             * @default 0
+             */
+            attempt_count?: number;
+            /** Strategies Tried */
+            strategies_tried?: string[];
+            /** Next Strategy */
+            next_strategy?: string | null;
+            /** Duration S */
+            duration_s?: number | null;
+            /** Next Attempt At */
+            next_attempt_at?: string | null;
+            /** Job Count */
+            job_count?: number | null;
+            /** Jobs */
+            jobs?: components["schemas"]["JobOut"][];
+            /** Audio Streams */
+            audio_streams?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Subtitle Streams */
+            subtitle_streams?: {
+                [key: string]: unknown;
+            }[] | null;
+        };
         /** MediaFileOut */
         MediaFileOut: {
             /** Id */
@@ -1233,6 +1405,23 @@ export interface components {
             transcoder_tag: string | null;
             /** Applied Rule Hash */
             applied_rule_hash: string | null;
+            /** Failure Category */
+            failure_category?: string | null;
+            /**
+             * Attempt Count
+             * @default 0
+             */
+            attempt_count?: number;
+            /** Strategies Tried */
+            strategies_tried?: string[];
+            /** Next Strategy */
+            next_strategy?: string | null;
+            /** Duration S */
+            duration_s?: number | null;
+            /** Next Attempt At */
+            next_attempt_at?: string | null;
+            /** Job Count */
+            job_count?: number | null;
         };
         /** MediaFilePage */
         MediaFilePage: {
@@ -1275,6 +1464,19 @@ export interface components {
          * @enum {string}
          */
         ResolutionBucket: "480p" | "576p" | "720p" | "1080p" | "1440p" | "2160p";
+        /**
+         * RetryFailedRequest
+         * @description Relance des échecs définitifs : tous, par bibliothèque, par catégorie
+         *     ou une sélection explicite de fichiers.
+         */
+        RetryFailedRequest: {
+            /** Library Id */
+            library_id?: number | null;
+            /** Failure Category */
+            failure_category?: string | null;
+            /** File Ids */
+            file_ids?: number[] | null;
+        };
         /** ScanTriggered */
         ScanTriggered: {
             /** Started */
@@ -1873,10 +2075,16 @@ export interface operations {
             query?: {
                 library_id?: number | null;
                 state?: components["schemas"]["JobState"] | null;
+                outcome?: string | null;
+                failure_category?: string | null;
+                strategy?: string | null;
+                media_file_id?: number | null;
+                dry_run?: boolean | null;
                 codec?: string | null;
                 date_from?: string | null;
                 date_to?: string | null;
                 search?: string | null;
+                sort?: string;
                 limit?: number;
                 offset?: number;
             };
@@ -2037,8 +2245,10 @@ export interface operations {
             query?: {
                 library_id?: number | null;
                 status?: components["schemas"]["MediaStatus"] | null;
+                failure_category?: string | null;
                 search?: string | null;
                 order?: string;
+                with_job_count?: boolean;
                 limit?: number;
                 offset?: number;
             };
@@ -2055,6 +2265,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MediaFilePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_failed_api_v1_files_retry_failed_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryFailedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionResult"];
                 };
             };
             /** @description Validation Error */
@@ -2086,6 +2329,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    file_detail_api_v1_files__file_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                file_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaFileDetail"];
                 };
             };
             /** @description Validation Error */
@@ -2239,7 +2513,7 @@ export interface operations {
     savings_over_time_api_v1_stats_savings_over_time_get: {
         parameters: {
             query?: {
-                days?: number;
+                days?: number | null;
             };
             header?: never;
             path?: never;
@@ -2255,7 +2529,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
-                    }[];
+                    };
                 };
             };
             /** @description Validation Error */
@@ -2293,7 +2567,9 @@ export interface operations {
     };
     gain_by_bucket_api_v1_stats_gain_by_bucket_get: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2311,12 +2587,21 @@ export interface operations {
                     }[];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     throughput_api_v1_stats_throughput_get: {
         parameters: {
             query?: {
-                days?: number;
+                days?: number | null;
             };
             header?: never;
             path?: never;
@@ -2381,7 +2666,9 @@ export interface operations {
     };
     failures_api_v1_stats_failures_get: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2397,6 +2684,48 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reliability_api_v1_stats_reliability_get: {
+        parameters: {
+            query?: {
+                days?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

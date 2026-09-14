@@ -471,3 +471,112 @@ async def probe_file(path: str, ffprobe_path: str) -> MediaProbe:
     except ProbeError:
         frames_json = None
     return parse_probe(path, format_json, frames_json)
+
+
+# ---------------------------------------------------------------------------
+# Durée RÉELLE d'une piste (horodatages des paquets)
+# ---------------------------------------------------------------------------
+# La durée « conteneur » (format.duration) est trompeuse : en Matroska elle
+# vient de l'en-tête (écrit par l'outil qui a muxé) ou du dernier paquet de
+# N'IMPORTE quelle piste — un sous-titre de fansub affiché jusqu'à 9:59:59
+# suffit à l'allonger d'une heure. En AVI, elle est estimée depuis le débit
+# audio. Seuls les horodatages des paquets d'une piste font foi.
+# Conteneurs aux horodatages absents ou approximatifs (DivX/XviD en AVI,
+# TS/VOB, WMV…). Constaté en production sur un AVI : après un seek, le
+# demuxer recalcule les horodatages depuis l'index de l'en-tête (1 485 s)
+# alors que la lecture séquentielle — celle d'un lecteur et de l'encodage —
+# s'arrête à 1 471,5 s. Pour eux, la mesure se fait par parcours complet.
+LEGACY_TIMESTAMP_FORMATS = frozenset({"avi", "mpeg", "mpegts", "mpegvideo", "asf", "flv", "rm", "vob"})
+
+
+def is_legacy_timestamp_format(format_name: str | None) -> bool:
+    if not format_name:
+        return False
+    return any(token in LEGACY_TIMESTAMP_FORMATS for token in format_name.split(","))
+
+
+def parse_packet_times(csv_output: str) -> list[tuple[float, float]]:
+    """Lignes ``pts_time,dts_time,duration_time`` → [(temps, durée)] (pur)."""
+    values: list[tuple[float, float]] = []
+    for line in csv_output.splitlines():
+        parts = line.strip().split(",")
+        if len(parts) < 2:
+            continue
+        stamp = _opt_float(parts[0]) if parts[0] not in ("", "N/A") else None
+        if stamp is None:
+            stamp = _opt_float(parts[1]) if parts[1] not in ("", "N/A") else None
+        if stamp is None:
+            continue
+        duration = _opt_float(parts[2]) if len(parts) > 2 else None
+        values.append((stamp, duration or 0.0))
+    return values
+
+
+@dataclass(frozen=True, slots=True)
+class StreamTimeline:
+    start_s: float
+    end_s: float
+
+    @property
+    def duration_s(self) -> float:
+        return max(0.0, self.end_s - self.start_s)
+
+
+async def _packet_times(
+    ffprobe_path: str, path: str, selector: str, interval: str | None, timeout: float
+) -> list[tuple[float, float]]:
+    args = [
+        ffprobe_path, "-v", "error", "-select_streams", selector,
+        "-show_entries", "packet=pts_time,dts_time,duration_time",
+        "-of", "csv=p=0",
+    ]
+    if interval:
+        args += ["-read_intervals", interval]
+    args.append(path)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        )
+    except OSError:
+        return []
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return []
+    return parse_packet_times(stdout.decode("utf-8", "replace"))
+
+
+async def probe_stream_timeline(
+    path: str,
+    ffprobe_path: str,
+    *,
+    selector: str = "v:0",
+    duration_hint_s: float | None = None,
+    full_scan: bool = False,
+    timeout: float = 600.0,
+) -> StreamTimeline | None:
+    """Début/fin réels d'une piste d'après ses paquets. None si indisponible.
+
+    Lecture des 30 premiers paquets puis de la fin du fichier (seek près de
+    la durée annoncée) ; si le seek ne rend rien (durée annoncée fausse), ou
+    si ``full_scan`` (conteneurs aux horodatages approximatifs, voir
+    LEGACY_TIMESTAMP_FORMATS), parcours complet des paquets — démultiplexage
+    seul, sans décodage.
+    """
+    head = await _packet_times(ffprobe_path, path, selector, "%+#30", 60.0)
+    if not head:
+        return None
+    start = min(t for t, _ in head)
+    tail: list[tuple[float, float]] = []
+    if not full_scan and duration_hint_s and duration_hint_s > 180:
+        tail = await _packet_times(
+            ffprobe_path, path, selector, f"{duration_hint_s - 120:.3f}%", timeout
+        )
+    if not tail:
+        tail = await _packet_times(ffprobe_path, path, selector, None, timeout)
+    if not tail:
+        return None
+    end = max(t + d for t, d in tail)
+    return StreamTimeline(start_s=start, end_s=end)

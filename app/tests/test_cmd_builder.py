@@ -12,6 +12,8 @@ from transcoder.core.cmd_builder import BuildError, BuildParams, build_ffmpeg_cm
 from transcoder.core.dovi import DvCapabilities, plan_treatment
 from transcoder.core.probe import MediaProbe, parse_probe
 from transcoder.core.rules import ResolvedRule, compute_rule_hash
+from transcoder.core.stream_plan import plan_streams
+from transcoder.core.strategy import Strategy
 from transcoder.enums import Codec, Container, DvPolicy, GpuApi, HdrPolicy, ResolutionBucket
 
 CAPS = DvCapabilities(libplacebo_dv=True, libplacebo=True)
@@ -70,9 +72,14 @@ def _probe(
         "disposition": {},
         "tags": {},
     }
+    audio = {"index": 1, "codec_type": "audio", "codec_name": "eac3", "tags": {"language": "fre"}}
+    subs = {"index": 2, "codec_type": "subtitle", "codec_name": "subrip", "tags": {}}
     return parse_probe(
         "/media/Films/film.mkv",
-        {"format": {"format_name": "matroska", "duration": "7200"}, "streams": [stream]},
+        {
+            "format": {"format_name": "matroska,webm", "duration": "7200"},
+            "streams": [stream, audio, subs],
+        },
     )
 
 
@@ -85,6 +92,7 @@ def _build(
     hdr_policy: HdrPolicy = HdrPolicy.PRESERVE,
     is_hdr_rule: bool | None = None,
     zero_copy: bool = False,
+    strategy: Strategy = Strategy.STANDARD,
 ) -> list[str]:
     plan = plan_treatment(
         probe, hdr_policy=hdr_policy, dv_policy=DvPolicy.CONVERT_TO_HDR10, caps=CAPS
@@ -101,7 +109,10 @@ def _build(
             container=container,
             plan=plan,
             src_bit_depth=probe.bit_depth,
+            stream_plan=plan_streams(probe.raw["streams"], container=container, strategy=strategy),
             p5_zero_copy=zero_copy,
+            strategy=strategy,
+            input_format=probe.format_name,
         )
     )
 
@@ -115,10 +126,13 @@ def _assert_common_skeleton(cmd: list[str]) -> None:
     assert cmd[0].endswith("ffmpeg")
     for flag in ("-hide_banner", "-nostdin", "-y"):
         assert flag in cmd
-    # Une seule piste vidéo, tout le reste conservé
+    # Mapping explicite : vidéo d'abord (piste 0 de la source), puis le reste
     i = cmd.index("-map")
-    assert cmd[i : i + 6] == ["-map", "0", "-map", "-0:v", "-map", "0:v:0"]
-    assert cmd[cmd.index("-c") + 1] == "copy"
+    assert cmd[i : i + 6] == ["-map", "0:0", "-map", "0:1", "-map", "0:2"]
+    # Codec par piste de sortie : encodeur pour la vidéo, copie pour le reste
+    assert cmd[cmd.index("-c:0") + 1].split("_")[1] in ("qsv", "vaapi")
+    assert cmd[cmd.index("-c:1") + 1] == "copy"
+    assert "-c" not in cmd  # plus de « -c copy » global aveugle
     # Métadonnées, chapitres, tag anti-boucle, progression
     assert cmd[cmd.index("-map_metadata") + 1] == "0"
     assert cmd[cmd.index("-map_chapters") + 1] == "0"
@@ -144,16 +158,16 @@ def _assert_common_skeleton(cmd: list[str]) -> None:
 def test_sdr_matrix(codec: Codec, api: GpuApi, encoder: str) -> None:
     cmd = _build(_probe(), codec=codec, api=api)
     _assert_common_skeleton(cmd)
-    assert cmd[cmd.index("-c:v") + 1] == encoder
+    assert cmd[cmd.index("-c:0") + 1] == encoder
     assert cmd[cmd.index("-b:v") + 1] == "12000k"
-    assert cmd[cmd.index("-maxrate") + 1] == "18000k"
-    assert cmd[cmd.index("-bufsize") + 1] == "24000k"
+    assert cmd[cmd.index("-maxrate:v") + 1] == "18000k"
+    assert cmd[cmd.index("-bufsize:v") + 1] == "24000k"
     if api is GpuApi.QSV:
-        assert cmd[cmd.index("-preset") + 1] == "slow"
+        assert cmd[cmd.index("-preset:v") + 1] == "slow"
         assert cmd[cmd.index("-pix_fmt") + 1] == "nv12"
         assert f"qsv=hw:{NODE}" in cmd
     else:
-        assert "-preset" not in cmd
+        assert "-preset:v" not in cmd
         assert f"vaapi=va:{NODE}" in cmd
         assert _vf(cmd) == "format=nv12,hwupload"
     # SDR passthrough : aucune colorimétrie forcée
@@ -275,7 +289,7 @@ def test_dv5_av1_target() -> None:
     cmd = _build(
         _probe(transfer="smpte2084", dv_profile=5, pix_fmt="yuv420p10le"), codec=Codec.AV1
     )
-    assert cmd[cmd.index("-c:v") + 1] == "av1_qsv"
+    assert cmd[cmd.index("-c:0") + 1] == "av1_qsv"
     assert "libplacebo=apply_dolbyvision=true" in _vf(cmd)
 
 
@@ -298,6 +312,7 @@ def test_skip_plan_raises() -> None:
                 container=Container.MKV,
                 plan=plan,
                 src_bit_depth=10,
+                stream_plan=plan_streams([], container=Container.MKV),
             )
         )
 
@@ -333,15 +348,15 @@ def test_tonemap_dv_applies_rpu() -> None:
 def test_mp4_container_specifics() -> None:
     cmd = _build(_probe(), container=Container.MP4)
     joined = " ".join(cmd)
-    assert "-map -0:t" in joined  # MP4 ne porte pas d'attachments
-    assert cmd[cmd.index("-c:s") + 1] == "mov_text"
+    # Sous-titres SubRip → mov_text (piste de sortie 2)
+    assert cmd[cmd.index("-c:2") + 1] == "mov_text"
     assert "+faststart" in joined
 
 
 def test_mkv_container_keeps_everything() -> None:
     cmd = _build(_probe())
-    assert "-c:s" not in cmd
-    assert "-0:t" not in cmd
+    assert cmd[cmd.index("-c:2") + 1] == "copy"
+    assert "+faststart" not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +393,7 @@ def test_full_matrix_builds(
     _assert_common_skeleton(cmd)
     # L'encodeur correspond toujours au couple (codec, api)
     expected = f"{codec.value}_{api.value}"
-    assert cmd[cmd.index("-c:v") + 1] == expected
+    assert cmd[cmd.index("-c:0") + 1] == expected
     # Jamais deux -vf
     assert cmd.count("-vf") <= 1
     # VAAPI a toujours un chemin d'upload vers le GPU
@@ -401,8 +416,6 @@ def test_stale_statistics_tags_are_stripped() -> None:
 def test_unknown_codec_streams_are_excluded() -> None:
     """Piste de sous-titres au codec inconnu (fansub corrompu) : exclue du
     mapping — sinon le muxer Matroska refuse l'en-tête et le job échoue."""
-    from transcoder.core.cmd_builder import unmappable_stream_indexes
-
     stream = {
         "index": 0, "codec_type": "video", "codec_name": "hevc",
         "width": 1920, "height": 1080, "pix_fmt": "yuv420p",
@@ -416,7 +429,6 @@ def test_unknown_codec_streams_are_excluded() -> None:
         {"format": {"format_name": "matroska", "duration": "1400"},
          "streams": [stream, audio, sub_ok, sub_broken]},
     )
-    assert unmappable_stream_indexes(probe) == (5,)
     plan = plan_treatment(
         probe, hdr_policy=HdrPolicy.PRESERVE, dv_policy=DvPolicy.CONVERT_TO_HDR10, caps=CAPS
     )
@@ -425,9 +437,116 @@ def test_unknown_codec_streams_are_excluded() -> None:
             ffmpeg_path="ffmpeg", src_path=probe.path, dst_path="/y.mkv",
             gpu_api=GpuApi.QSV, drm_node=NODE, rule=_rule(), container=Container.MKV,
             plan=plan, src_bit_depth=probe.bit_depth,
-            exclude_stream_indexes=unmappable_stream_indexes(probe),
+            stream_plan=plan_streams(probe.raw["streams"], container=Container.MKV),
         )
     )
     joined = " ".join(cmd)
-    assert "-map -0:5" in joined
-    assert "-analyzeduration 200M" in joined and "-probesize 200M" in joined
+    assert "-map 0:5" not in joined
+    assert "-map 0:0 -map 0:1 -map 0:2" in joined
+    # MKV : pas d'analyse agrandie (elle faisait décaler les sous-titres ASS)
+    assert "-analyzeduration" not in joined and "-probesize" not in joined
+
+
+# ---------------------------------------------------------------------------
+# Correctifs issus de la production : pistes non muxables en Matroska
+# ---------------------------------------------------------------------------
+def _probe_streams(*extra: dict[str, object], fmt: str = "mov,mp4,m4a,3gp,3g2,mj2") -> MediaProbe:
+    video = {
+        "index": 0, "codec_type": "video", "codec_name": "h264",
+        "width": 1920, "height": 1080, "pix_fmt": "yuv420p", "disposition": {}, "tags": {},
+    }
+    return parse_probe(
+        "/x/episode.mp4",
+        {"format": {"format_name": fmt, "duration": "1400"}, "streams": [video, *extra]},
+    )
+
+
+def _cmd_for(probe: MediaProbe, strategy: Strategy = Strategy.STANDARD) -> list[str]:
+    plan = plan_treatment(
+        probe, hdr_policy=HdrPolicy.PRESERVE, dv_policy=DvPolicy.CONVERT_TO_HDR10, caps=CAPS
+    )
+    return build_ffmpeg_cmd(
+        BuildParams(
+            ffmpeg_path="ffmpeg", src_path=probe.path, dst_path="/y.mkv",
+            gpu_api=GpuApi.QSV, drm_node=NODE, rule=_rule(), container=Container.MKV,
+            plan=plan, src_bit_depth=8,
+            stream_plan=plan_streams(probe.raw["streams"], container=Container.MKV, strategy=strategy),
+            strategy=strategy, input_format=probe.format_name,
+        )
+    )
+
+
+def test_mov_text_subtitles_converted_to_srt() -> None:
+    """Code de sortie 218 en prod : « Subtitle codec 94213 is not supported »."""
+    probe = _probe_streams(
+        {"index": 1, "codec_type": "audio", "codec_name": "aac"},
+        {"index": 2, "codec_type": "subtitle", "codec_name": "mov_text"},
+    )
+    cmd = _cmd_for(probe)
+    assert cmd[cmd.index("-c:2") + 1] == "srt"
+
+
+def test_data_streams_are_not_mapped() -> None:
+    """Code de sortie 234 en prod : « Only audio, video, and subtitles are
+    supported for Matroska » (piste tmcd des MP4)."""
+    probe = _probe_streams(
+        {"index": 1, "codec_type": "audio", "codec_name": "aac"},
+        {"index": 2, "codec_type": "data", "codec_name": "bin_data"},
+    )
+    joined = " ".join(_cmd_for(probe))
+    assert "-map 0:2" not in joined
+    assert "-map 0:0 -map 0:1" in joined
+
+
+def test_pcm_bluray_converted_to_flac() -> None:
+    probe = _probe_streams(
+        {"index": 1, "codec_type": "audio", "codec_name": "pcm_bluray"}, fmt="mpegts"
+    )
+    cmd = _cmd_for(probe)
+    assert cmd[cmd.index("-c:1") + 1] == "flac"
+
+
+def test_legacy_containers_get_genpts() -> None:
+    avi = _probe_streams({"index": 1, "codec_type": "audio", "codec_name": "mp3"}, fmt="avi")
+    cmd = _cmd_for(avi)
+    assert cmd[cmd.index("-fflags") + 1] == "+genpts"
+    assert cmd.index("-fflags") < cmd.index("-i")
+    mkv = _probe_streams(fmt="matroska,webm")
+    assert "-fflags" not in _cmd_for(mkv)
+
+
+def test_tolerant_strategy_input_flags() -> None:
+    probe = _probe_streams({"index": 1, "codec_type": "audio", "codec_name": "aac"})
+    cmd = _cmd_for(probe, Strategy.TOLERANT)
+    i = cmd.index("-i")
+    head = cmd[:i]
+    assert "+genpts+discardcorrupt" in head
+    assert head[head.index("-err_detect") + 1] == "ignore_err"
+    assert head[head.index("-max_error_rate") + 1] == "1.0"
+    assert cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
+
+
+def test_no_video_stream_raises() -> None:
+    probe = _probe_streams()
+    plan = plan_treatment(
+        probe, hdr_policy=HdrPolicy.PRESERVE, dv_policy=DvPolicy.CONVERT_TO_HDR10, caps=CAPS
+    )
+    with pytest.raises(BuildError):
+        build_ffmpeg_cmd(
+            BuildParams(
+                ffmpeg_path="ffmpeg", src_path="/x", dst_path="/y.mkv", gpu_api=GpuApi.QSV,
+                drm_node=NODE, rule=_rule(), container=Container.MKV, plan=plan,
+                src_bit_depth=8, stream_plan=plan_streams([], container=Container.MKV),
+            )
+        )
+
+
+def test_deep_probe_only_for_packet_identified_containers() -> None:
+    """Régression prod : -probesize 200M sur un MKV faisait déplacer des
+    milliers d'événements ASS par le muxer (Non-monotonic DTS)."""
+    mkv = _probe_streams({"index": 1, "codec_type": "subtitle", "codec_name": "ass"}, fmt="matroska,webm")
+    assert "-probesize" not in _cmd_for(mkv)
+    ts = _probe_streams({"index": 1, "codec_type": "audio", "codec_name": "ac3"}, fmt="mpegts")
+    cmd = _cmd_for(ts)
+    assert cmd[cmd.index("-probesize") + 1] == "200M"
+    assert cmd.index("-probesize") < cmd.index("-i")

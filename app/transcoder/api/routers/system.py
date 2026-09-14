@@ -30,7 +30,8 @@ _ALLOWED_SETTINGS: frozenset[str] = frozenset(
         "dry_run_global", "max_concurrent_jobs", "min_free_disk_gb",
         "queue_paused", "dv_ssim_threshold", "dv_chroma_delta_max",
         "validation_decode", "max_retries", "progress_snapshot_interval_s",
-        "early_abort_no_gain",
+        "early_abort_no_gain", "preflight_gain_check", "preflight_decode_check",
+        "auto_fallback",
         "jellyfin_url", "jellyfin_api_key",
     }
 )

@@ -1,9 +1,7 @@
 import {
   Activity,
-  BarChart3,
   Cpu,
   FolderOpen,
-  History,
   LayoutDashboard,
   ListOrdered,
   Menu,
@@ -20,8 +18,6 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/queue", label: "Queue", icon: ListOrdered },
-  { to: "/history", label: "Historique", icon: History },
-  { to: "/stats", label: "Statistiques", icon: BarChart3 },
   { to: "/libraries", label: "Bibliothèques", icon: FolderOpen },
   { to: "/settings", label: "GPU & Réglages", icon: Cpu },
 ];

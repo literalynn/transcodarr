@@ -42,6 +42,12 @@ class RuntimeConfig:
     max_retries: int
     early_abort_no_gain: bool
     progress_snapshot_interval_s: int
+    # Pré-vol (core/preflight.py) : écarter les encodages sans gain prévisible
+    # et tester le décodage de la source avant de lancer le GPU
+    preflight_gain_check: bool
+    preflight_decode_check: bool
+    # Replis automatiques (core/strategy.py) après un échec lié au fichier
+    auto_fallback: bool
     jellyfin_url: str | None
     jellyfin_api_key: str | None
 
@@ -96,6 +102,9 @@ def config_from_values(values: dict[str, Any]) -> RuntimeConfig:
         max_retries=_int(values, "max_retries", 2),
         early_abort_no_gain=_bool(values, "early_abort_no_gain", True),
         progress_snapshot_interval_s=_int(values, "progress_snapshot_interval_s", 10),
+        preflight_gain_check=_bool(values, "preflight_gain_check", True),
+        preflight_decode_check=_bool(values, "preflight_decode_check", True),
+        auto_fallback=_bool(values, "auto_fallback", True),
         jellyfin_url=_opt_str(values, "jellyfin_url"),
         jellyfin_api_key=_opt_str(values, "jellyfin_api_key"),
     )

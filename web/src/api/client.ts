@@ -15,6 +15,7 @@ export type Gpu = Schemas["GpuOut"];
 export type GpuCreate = Schemas["GpuCreate"];
 export type GpuPatch = Schemas["GpuPatch"];
 export type MediaFile = Schemas["MediaFileOut"];
+export type MediaFileDetail = Schemas["MediaFileDetail"];
 export type MediaFilePage = Schemas["MediaFilePage"];
 export type Job = Schemas["JobOut"];
 export type JobDetail = Schemas["JobDetail"];
@@ -41,10 +42,17 @@ export interface StatsSummary {
   libraries_dry_run: { id: number; name: string; dry_run: boolean | null }[];
 }
 
-export interface SavingsPoint {
-  day: string;
-  bytes_saved: number;
-  cumulative: number;
+/** Granularité des courbes d'activité (créneaux UTC renvoyés par l'API). */
+export type TimeUnit = "hour" | "day" | "week";
+
+export interface SavingsStats {
+  period_days: number | null;
+  unit: TimeUnit;
+  /** Espace récupéré sur la période (remplacements réels, hors dry-run) */
+  total_bytes: number;
+  files: number;
+  avg_gain_percent: number | null;
+  points: { t: string; bytes_saved: number; cumulative: number }[];
 }
 
 export interface CodecStats {
@@ -60,7 +68,13 @@ export interface GainByBucket {
 }
 
 export interface ThroughputStats {
-  per_day: { day: string; files: number; gpu_hours: number }[];
+  period_days: number | null;
+  unit: TimeUnit;
+  files: number;
+  gpu_hours: number;
+  /** Fichiers réencodés par heure, en moyenne sur la période écoulée */
+  files_per_hour: number | null;
+  points: { t: string; files: number; gpu_hours: number }[];
   by_gpu: {
     gpu_id: number | null;
     files: number;
@@ -80,11 +94,118 @@ export interface TopRemainingItem {
   status: string;
 }
 
+export interface FailureCategoryStat {
+  category: string;
+  /** Tentatives en échec sur la période */
+  jobs: number;
+  /** Fichiers distincts concernés sur la période */
+  files: number;
+  /** Fichiers actuellement en échec définitif avec cette cause */
+  failed_files: number;
+  last_seen: string | null;
+}
+
 export interface FailureStats {
+  period_days: number | null;
   total_jobs: number;
   failed_jobs: number;
   failure_rate: number;
-  top_errors: { error: string; count: number }[];
+  failed_files_total: number;
+  categories: FailureCategoryStat[];
+  top_errors: { error: string; category: string | null; count: number }[];
+}
+
+export interface ReliabilityStats {
+  period_days: number | null;
+  attempts: number;
+  counts: {
+    success: number;
+    failed: number;
+    no_gain: number;
+    no_gain_early: number;
+    no_gain_preflight: number;
+    cancelled: number;
+  };
+  success_rate: number | null;
+  attempt_success_rate: number | null;
+  first_try_success: number;
+  first_try_rate: number | null;
+  recovered_by_fallback: number;
+  files: {
+    attempted: number;
+    succeeded: number;
+    no_gain: number;
+    failed_now: number;
+    retrying_now: number;
+    predicted_no_gain: number;
+  };
+  gpu_hours: { success: number; failed: number; no_gain: number; cancelled: number };
+  unit: TimeUnit;
+  timeline: { t: string; success: number; failed: number; no_gain: number }[];
+  strategies: { strategy: string; success: number; failed: number; no_gain: number }[];
+}
+
+/** Diagnostics d'un job (jobs.diagnostics, JSONB). */
+export interface PreflightCheck {
+  name: string;
+  status: "ok" | "warning" | "error" | "skipped";
+  detail: string;
+}
+
+export interface StreamDecisionInfo {
+  index: number;
+  kind: string;
+  codec: string | null;
+  action: "encode" | "copy" | "convert" | "drop";
+  target_codec: string | null;
+  language: string | null;
+  title: string | null;
+  reason: string | null;
+}
+
+export interface JobDiagnostics {
+  preflight?: {
+    checks: PreflightCheck[];
+    gain: {
+      predicted_gain_percent: number | null;
+      src_video_kbps: number | null;
+      target_kbps: number;
+      bitrate_estimated: boolean;
+      hopeless: boolean;
+      reason: string;
+    } | null;
+    decode_errors: boolean;
+  };
+  stream_plan?: {
+    streams: StreamDecisionInfo[];
+    expected_audio: number;
+    expected_subtitles: number;
+    adjustments: number;
+  };
+  strategy?: {
+    used: string;
+    requested: string | null;
+    gpu_api: string;
+    attempt: number;
+    container?: string;
+    input_format?: string | null;
+    /** Fichier final assemblé par mkvmerge (stratégie mkvmerge_mux) */
+    mkvmerge?: boolean;
+  };
+  treatment?: { action: string; reason: string };
+  decision?: {
+    kind: "fallback" | "retry" | "final";
+    next_strategy: string | null;
+    retry_in_s: number | null;
+    reason: string;
+  };
+}
+
+export interface ValidationCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  meta?: Record<string, unknown>;
 }
 
 export interface LibraryProgress {
@@ -112,6 +233,8 @@ export interface CapabilitiesInfo {
     fell_back_to_vaapi: boolean;
     encoders: Record<string, { ok: boolean; error: string | null }>;
     p5_zero_copy: boolean;
+    alt_api: string | null;
+    alt_encoders: Record<string, { ok: boolean; error: string | null }>;
   }[];
 }
 
@@ -119,4 +242,11 @@ export async function fetchJson<T>(url: string): Promise<T> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`${url} → HTTP ${resp.status}`);
   return (await resp.json()) as T;
+}
+
+/** Période des statistiques : nombre de jours, ou null = depuis toujours. */
+export type StatsPeriod = 1 | 7 | 30 | null;
+
+export function periodQuery(days: StatsPeriod): string {
+  return days === null ? "" : `?days=${days}`;
 }

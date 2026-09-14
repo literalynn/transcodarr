@@ -25,8 +25,12 @@ from transcoder.models import Base
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# La config de logs d'alembic.ini ne s'applique qu'à la CLI : appliquée au
+# démarrage de l'app, elle remettait le logger racine en WARN et désactivait
+# les loggers existants — tous les logs applicatifs (jobs, validations…)
+# disparaissaient de `docker logs` après la migration.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

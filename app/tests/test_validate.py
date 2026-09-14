@@ -261,7 +261,6 @@ def test_reference_decode_p7_p81_without_rpu() -> None:
 def test_stream_counts_ignore_unknown_codec_tracks() -> None:
     """Les pistes au codec inconnu (exclues du mapping par le builder) ne
     comptent pas dans la complétude attendue (§5.5.6)."""
-    src = _probe(audio=2, subs=1)
     # Ajoute une piste de sous-titres SANS codec à la source
     raw = {
         "format": {"format_name": "matroska", "duration": "3600"},
@@ -280,3 +279,99 @@ def test_stream_counts_ignore_unknown_codec_tracks() -> None:
     # Mais une piste VALIDE manquante reste un échec
     dst_missing = _probe(audio=1, subs=1)
     assert not check_stream_counts(src_with_broken, dst_missing).ok
+
+
+# ---------------------------------------------------------------------------
+# Contrôle 5 : interprétation du décodage d'intégrité (vidéo seule)
+# ---------------------------------------------------------------------------
+def test_integrity_result_clean() -> None:
+    from transcoder.core.validate import integrity_result
+
+    assert integrity_result(0, "", scope="décodage").ok
+
+
+def test_integrity_result_benign_noise_passes() -> None:
+    from transcoder.core.validate import integrity_result
+
+    noise = "[null @ 0x1] Application provided invalid, non monotonically increasing dts to muxer\n"
+    assert integrity_result(0, noise, scope="décodage").ok
+
+
+def test_integrity_result_crash_without_message() -> None:
+    """Cas prod « 5_integrity : erreurs : » (code ≠ 0, stderr vide)."""
+    from transcoder.core.validate import integrity_result
+
+    r = integrity_result(-11, "", scope="décodage")
+    assert not r.ok and r.meta is not None and r.meta["crashed"]
+    assert "SIGSEGV" in r.detail
+    r2 = integrity_result(1, "", scope="décodage")
+    assert not r2.ok and r2.meta is not None and r2.meta["crashed"]
+
+
+def test_integrity_result_real_errors() -> None:
+    from transcoder.core.validate import integrity_result
+
+    r = integrity_result(183, "[hevc @ 0x2] Invalid NAL unit size\n", scope="décodage")
+    assert not r.ok and r.meta is not None and not r.meta["crashed"]
+    assert "Invalid NAL unit size" in r.detail
+
+
+def test_stream_counts_use_stream_plan() -> None:
+    from transcoder.core.stream_plan import plan_streams
+    from transcoder.enums import Container
+
+    src = _probe(audio=2, subs=1)
+    raw_streams = src.raw["streams"] + [{"index": 9, "codec_type": "data"}]
+    plan = plan_streams(raw_streams, container=Container.MKV)
+    dst = _probe(audio=2, subs=1)
+    assert check_stream_counts(src, dst, stream_plan=plan).ok
+    dst_missing = _probe(audio=1, subs=1)
+    assert not check_stream_counts(src, dst_missing, stream_plan=plan).ok
+
+
+# ---------------------------------------------------------------------------
+# Contrôle 6b : horodatages des pistes copiées (log RÉEL de production)
+# ---------------------------------------------------------------------------
+PROD_LOG_ASS_SHIFTED = """
+[matroska,webm @ 0x55b3868db040] Could not find codec parameters for stream 20 (Attachment: none): unknown codec
+[sost#0:3/copy @ 0x55b38ffaf640] Non-monotonic DTS; previous: 1248000, current: 15000; changing to 1248000. This may result in incorrect timestamps in the output file.
+[sost#0:4/copy @ 0x55b38ffb0340] Non-monotonic DTS; previous: 1380980, current: 15000; changing to 1380980. This may result in incorrect timestamps in the output file.
+[sost#0:4/copy @ 0x55b38ffb0340] Non-monotonic DTS; previous: 1380980, current: 210140; changing to 1380980. This may result in incorrect timestamps in the output file.
+"""
+
+PGS_ONE_MS = """
+[sost#0:5/copy @ 0x1] Non-monotonic DTS; previous: 845612, current: 845512; changing to 845612. This may result in incorrect timestamps in the output file.
+[sost#0:5/copy @ 0x1] Non-monotonic DTS; previous: 845612, current: 845600; changing to 845612. This may result in incorrect timestamps in the output file.
+"""
+
+
+def test_parse_dts_corrections_real_log() -> None:
+    from transcoder.core.validate import parse_dts_corrections
+
+    c = parse_dts_corrections(PROD_LOG_ASS_SHIFTED)
+    assert c.count == {"s": 3}
+    assert c.max_shift_ms["s"] == 1380980 - 15000
+    assert c.worst_stream["s"] == 4
+
+
+def test_shifted_ass_events_fail_validation() -> None:
+    from transcoder.core.failures import FailureCategory, classify_validation_failure
+    from transcoder.core.validate import check_copied_timestamps
+
+    r = check_copied_timestamps(PROD_LOG_ASS_SHIFTED, matroska_output=True)
+    assert not r.ok
+    assert "sous-titres" in r.detail and "1365.98 s" in r.detail
+    f = classify_validation_failure(
+        r.name, r.detail, exit_code=0, ffmpeg_log="", check_meta=r.meta
+    )
+    assert f.category is FailureCategory.SUBTITLE_TIMING
+
+
+def test_tiny_corrections_tolerated_in_matroska() -> None:
+    from transcoder.core.validate import check_copied_timestamps
+
+    r = check_copied_timestamps(PGS_ONE_MS, matroska_output=True)
+    assert r.ok and "négligeables" in r.detail
+    assert not check_copied_timestamps(PGS_ONE_MS, matroska_output=False).ok
+    assert check_copied_timestamps("", matroska_output=True).ok
+    assert check_copied_timestamps(None, matroska_output=True).ok

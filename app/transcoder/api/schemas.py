@@ -181,6 +181,14 @@ class MediaFileOut(_OrmModel):
     last_error: str | None
     transcoder_tag: str | None
     applied_rule_hash: str | None
+    failure_category: str | None = None
+    attempt_count: int = 0
+    strategies_tried: list[str] = Field(default_factory=list)
+    next_strategy: str | None = None
+    duration_s: float | None = None
+    next_attempt_at: datetime.datetime | None = None
+    # Nombre total de jobs (tentatives) enregistrés pour ce fichier
+    job_count: int | None = None
 
 
 class PageMeta(BaseModel):
@@ -223,6 +231,10 @@ class JobOut(_OrmModel):
     exit_code: int | None
     error_message: str | None
     trashed_path: str | None
+    attempt: int = 1
+    strategy: str | None = None
+    failure_category: str | None = None
+    failure_detail: str | None = None
 
 
 class JobDetail(JobOut):
@@ -230,6 +242,24 @@ class JobDetail(JobOut):
     log_tail: str | None
     log_path: str | None
     validation_report: dict[str, Any] | None
+    diagnostics: dict[str, Any] | None = None
+
+
+class MediaFileDetail(MediaFileOut):
+    """Fichier + toutes ses tentatives (suivi des échecs et replis)."""
+
+    jobs: list[JobOut] = Field(default_factory=list)
+    audio_streams: list[dict[str, Any]] | None = None
+    subtitle_streams: list[dict[str, Any]] | None = None
+
+
+class RetryFailedRequest(BaseModel):
+    """Relance des échecs définitifs : tous, par bibliothèque, par catégorie
+    ou une sélection explicite de fichiers."""
+
+    library_id: int | None = None
+    failure_category: str | None = None
+    file_ids: list[int] | None = None
 
 
 class JobPage(BaseModel):
@@ -252,6 +282,8 @@ class ActiveJob(BaseModel):
     fps: float | None = None
     speed: float | None = None
     eta_s: float | None = None
+    strategy: str | None = None
+    attempt: int | None = None
 
 
 class QueueState(BaseModel):

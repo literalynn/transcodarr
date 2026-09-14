@@ -19,7 +19,10 @@ import {
   type LibraryCreate,
   type LibraryPatch,
   type LibraryProgress,
-  type SavingsPoint,
+  type ReliabilityStats,
+  type SavingsStats,
+  type StatsPeriod,
+  periodQuery,
   type StatsSummary,
   type ThroughputStats,
   type TopRemainingItem,
@@ -73,24 +76,32 @@ export function useQueueState() {
   });
 }
 
-export function useFiles(params: {
+export interface FilesParams {
   library_id?: number;
   status?: string;
+  failure_category?: string;
   search?: string;
   order?: string;
+  with_job_count?: boolean;
   limit?: number;
   offset?: number;
-}) {
+}
+
+export function useFiles(params: FilesParams, options?: { refetchInterval?: number }) {
   return useQuery({
     queryKey: ["files", params],
+    refetchInterval: options?.refetchInterval,
+    placeholderData: (previous) => previous,
     queryFn: async () => {
       const { data, error } = await api.GET("/api/v1/files", {
         params: {
           query: {
             library_id: params.library_id,
             status: params.status as never,
-            search: params.search,
+            failure_category: params.failure_category,
+            search: params.search || undefined,
             order: params.order,
+            with_job_count: params.with_job_count,
             limit: params.limit,
             offset: params.offset,
           },
@@ -102,22 +113,49 @@ export function useFiles(params: {
   });
 }
 
-export function useJobs(params: {
+export function useFileDetail(fileId: number | null) {
+  return useQuery({
+    queryKey: ["file", fileId],
+    enabled: fileId !== null,
+    queryFn: async () => {
+      const { data, error } = await api.GET("/api/v1/files/{file_id}", {
+        params: { path: { file_id: fileId ?? 0 } },
+      });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export interface JobsParams {
   library_id?: number;
   state?: string;
+  outcome?: string;
+  failure_category?: string;
+  strategy?: string;
+  media_file_id?: number;
   search?: string;
+  sort?: string;
   limit?: number;
   offset?: number;
-}) {
+}
+
+export function useJobs(params: JobsParams) {
   return useQuery({
     queryKey: ["jobs", params],
+    placeholderData: (previous) => previous,
     queryFn: async () => {
       const { data, error } = await api.GET("/api/v1/jobs", {
         params: {
           query: {
             library_id: params.library_id,
             state: params.state as never,
-            search: params.search,
+            outcome: params.outcome,
+            failure_category: params.failure_category,
+            strategy: params.strategy,
+            media_file_id: params.media_file_id,
+            search: params.search || undefined,
+            sort: params.sort,
             limit: params.limit,
             offset: params.offset,
           },
@@ -181,10 +219,12 @@ export const useStatsSummary = (): UseQueryResult<StatsSummary> =>
     queryFn: () => fetchJson<StatsSummary>("/api/v1/stats/summary"),
   });
 
-export const useSavingsOverTime = (): UseQueryResult<SavingsPoint[]> =>
+export const useSavingsOverTime = (days: StatsPeriod): UseQueryResult<SavingsStats> =>
   useQuery({
-    queryKey: ["stats", "savings"],
-    queryFn: () => fetchJson<SavingsPoint[]>("/api/v1/stats/savings-over-time"),
+    queryKey: ["stats", "savings", days],
+    refetchInterval: 60000,
+    placeholderData: (previous) => previous,
+    queryFn: () => fetchJson<SavingsStats>(`/api/v1/stats/savings-over-time${periodQuery(days)}`),
   });
 
 export const useCodecStats = (): UseQueryResult<CodecStats> =>
@@ -193,16 +233,20 @@ export const useCodecStats = (): UseQueryResult<CodecStats> =>
     queryFn: () => fetchJson<CodecStats>("/api/v1/stats/codecs"),
   });
 
-export const useGainByBucket = (): UseQueryResult<GainByBucket[]> =>
+export const useGainByBucket = (days: StatsPeriod): UseQueryResult<GainByBucket[]> =>
   useQuery({
-    queryKey: ["stats", "gain-by-bucket"],
-    queryFn: () => fetchJson<GainByBucket[]>("/api/v1/stats/gain-by-bucket"),
+    queryKey: ["stats", "gain-by-bucket", days],
+    refetchInterval: 60000,
+    placeholderData: (previous) => previous,
+    queryFn: () => fetchJson<GainByBucket[]>(`/api/v1/stats/gain-by-bucket${periodQuery(days)}`),
   });
 
-export const useThroughput = (): UseQueryResult<ThroughputStats> =>
+export const useThroughput = (days: StatsPeriod): UseQueryResult<ThroughputStats> =>
   useQuery({
-    queryKey: ["stats", "throughput"],
-    queryFn: () => fetchJson<ThroughputStats>("/api/v1/stats/throughput"),
+    queryKey: ["stats", "throughput", days],
+    refetchInterval: 60000,
+    placeholderData: (previous) => previous,
+    queryFn: () => fetchJson<ThroughputStats>(`/api/v1/stats/throughput${periodQuery(days)}`),
   });
 
 export const useTopRemaining = (): UseQueryResult<TopRemainingItem[]> =>
@@ -211,10 +255,20 @@ export const useTopRemaining = (): UseQueryResult<TopRemainingItem[]> =>
     queryFn: () => fetchJson<TopRemainingItem[]>("/api/v1/stats/top-remaining"),
   });
 
-export const useFailures = (): UseQueryResult<FailureStats> =>
+export const useFailures = (days: StatsPeriod = null): UseQueryResult<FailureStats> =>
   useQuery({
-    queryKey: ["stats", "failures"],
-    queryFn: () => fetchJson<FailureStats>("/api/v1/stats/failures"),
+    queryKey: ["stats", "failures", days],
+    refetchInterval: 30000,
+    placeholderData: (previous) => previous,
+    queryFn: () => fetchJson<FailureStats>(`/api/v1/stats/failures${periodQuery(days)}`),
+  });
+
+export const useReliability = (days: StatsPeriod): UseQueryResult<ReliabilityStats> =>
+  useQuery({
+    queryKey: ["stats", "reliability", days],
+    refetchInterval: 30000,
+    placeholderData: (previous) => previous,
+    queryFn: () => fetchJson<ReliabilityStats>(`/api/v1/stats/reliability${periodQuery(days)}`),
   });
 
 export const useLibraryProgress = (): UseQueryResult<LibraryProgress[]> =>
@@ -342,7 +396,7 @@ export function useFileAction() {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => invalidate("files", "queue", "stats"),
+    onSuccess: () => invalidate("files", "queue", "stats", "file"),
   });
 }
 
@@ -357,7 +411,23 @@ export function useJobAction() {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => invalidate("jobs", "queue", "files"),
+    onSuccess: () => invalidate("jobs", "queue", "files", "file", "stats"),
+  });
+}
+
+export function useRetryFailed() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (body: {
+      library_id?: number;
+      failure_category?: string;
+      file_ids?: number[];
+    }) => {
+      const { data, error } = await api.POST("/api/v1/files/retry-failed", { body });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => invalidate("files", "queue", "stats", "jobs", "file"),
   });
 }
 

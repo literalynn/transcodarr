@@ -27,7 +27,12 @@ from starlette.types import Scope
 from transcoder.api.routers import files, gpus, jobs, libraries, queue, stats, system, ws
 from transcoder.config import get_settings
 from transcoder.core.capabilities import GpuConfig, detect_capabilities
-from transcoder.core.queue import QueueManager, cleanup_orphan_tmp, recover_after_crash
+from transcoder.core.queue import (
+    QueueManager,
+    backfill_failure_categories,
+    cleanup_orphan_tmp,
+    recover_after_crash,
+)
 from transcoder.db import dispose_engine, session_scope
 from transcoder.migrate import run_migrations
 from transcoder.models import Gpu
@@ -102,13 +107,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler.start()
     await scheduler.reload()
 
+    # 6. Reclassement de l'historique des échecs (tâche de fond, non bloquante)
+    backfill_task = asyncio.create_task(_run_backfill(), name="backfill-failures")
+
     logger.info("Transcodeur démarré (dry_run_global=%s)", config.dry_run_global)
     try:
         yield
     finally:
+        backfill_task.cancel()
         scheduler.shutdown()
         await queue_manager.stop()
         await dispose_engine()
+
+
+async def _run_backfill() -> None:
+    try:
+        await backfill_failure_categories()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Reclassement de l'historique des échecs interrompu")
 
 
 class SpaStaticFiles(StaticFiles):

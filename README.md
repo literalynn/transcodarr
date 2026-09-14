@@ -35,14 +35,32 @@ destroy or corrupt an original file.**
 - **Early no-gain abort**: projected output size is monitored during the
   encode; hopeless jobs are cancelled after ~15% instead of wasting hours
   on a 4K film that won't shrink.
+- **Pre-flight checks before touching the GPU**: source readable and not
+  being copied, quick decode test, and a gain prediction calibrated on real
+  jobs — files whose video bitrate is already below the target are skipped
+  without encoding.
+- **Self-healing failures**: every failure is classified (incompatible
+  subtitles, data tracks, corrupt source, timestamps, GPU encoder error…)
+  with the significant FFmpeg error lines. File-caused failures are retried
+  automatically with increasingly robust strategies (tolerant decoding →
+  lossless SubRip rebuild → mkvmerge assembly copying the original audio and
+  subtitles bit for bit → strict track allowlist → the GPU's other API);
+  ASS/SSA subtitles are never re-encoded or dropped; permanent failures are
+  never retried in a loop, and one click re-runs them with every method.
+- **Container-aware track plan**: each track is copied, converted
+  (mov_text → SubRip, Blu-ray PCM → FLAC) or excluded with a reason,
+  instead of a blind `-map 0 -c copy` that fails the mux.
 - **Dry-run mode** (global and per-library): real encodes, full history and
   stats, output to a side directory — nothing replaced until you're ready.
-- **Web UI** (React, dark theme, mobile-friendly, EN/FR): live dashboard with
-  per-worker progress and phase, virtualized queue with drag reordering,
-  expandable history with the exact FFmpeg command and searchable live
-  logs, statistics (cumulative savings, codec split, gain per bucket,
-  failures), full library/GPU/settings management — everything hot-reloaded,
-  no restarts.
+- **Web UI** (React, dark theme, mobile-friendly, EN/FR): one dashboard with
+  live per-worker progress and a period selector (24 h / 7 d / 30 d / all)
+  for success rate, first-try rate, failure causes, space saved, throughput
+  and gain per bucket, plus the library codec split; a queue
+  page with waiting/running jobs (drag reordering), a filterable history of
+  every attempt and a failures view with bulk retry; a diagnostic panel per
+  job (cause and remedy, automatic decision, pre-flight, track plan,
+  validation, attempt timeline, FFmpeg command, searchable live logs); full
+  library/GPU/settings management — everything hot-reloaded, no restarts.
 - **Ops-friendly**: single-folder deployment, single `docker compose up -d`,
   all state in a bind-mounted `data/` you can back up with `tar`, JSON
   config export/import, one-command DB backup/restore scripts, resource
@@ -165,13 +183,15 @@ ffprobe -v error -show_entries format_tags=TRANSCODER_TAG -of default=nw=1 file.
 docker compose exec app python -m pytest -q
 ```
 
-~300 tests: pure-function unit coverage of the FFmpeg command builder
+~400 tests: pure-function unit coverage of the FFmpeg command builder
 (codec × HDR × DV profile matrix), the DV decision matrix, validation
 checks, anti-loop logic, atomic replacement on a real filesystem — plus a
 software-encoder end-to-end (source generation → encode → 9 validations →
 tag round-trip) and, when the database is reachable, a full DB-backed
 pipeline test (claim → encode → validate → atomic replace) and an
-`alembic check` guarding model/migration drift. No GPU required.
+`alembic check` guarding model/migration drift, and end-to-end recovery
+scenarios (track-plan success, automatic fallback, permanent failure not
+re-queued by the scan). No GPU required.
 
 ## Architecture (short version)
 

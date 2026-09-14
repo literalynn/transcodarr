@@ -173,6 +173,9 @@ def default_app_settings(
         # Abandon anticipé si la taille projetée dépasse le seuil de gain (§5.5.7)
         "early_abort_no_gain": True,
         "progress_snapshot_interval_s": 10,
+        "preflight_gain_check": True,
+        "preflight_decode_check": True,
+        "auto_fallback": True,
         # Intégration Jellyfin optionnelle (DateCreated, §5.1)
         "jellyfin_url": None,
         "jellyfin_api_key": None,

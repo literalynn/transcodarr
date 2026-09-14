@@ -4,20 +4,51 @@ from __future__ import annotations
 
 import datetime
 import os
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder.api import schemas
 from transcoder.api.deps import get_queue_manager
-from transcoder.core.queue import QueueManager
+from transcoder.core.queue import QueueManager, reset_for_retry
 from transcoder.db import get_db
 from transcoder.enums import JobState, MediaStatus
 from transcoder.models import Job, MediaFile
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+_ACTIVE_STATES = (JobState.QUEUED, JobState.RUNNING, JobState.VALIDATING, JobState.REPLACING)
+
+
+def _outcome_condition(outcome: str) -> Any:
+    """Groupes d'issues lisibles pour l'UI (onglets/segments de l'historique)."""
+    if outcome == "success":
+        return Job.state == JobState.SUCCESS
+    if outcome == "recovered":
+        return and_(Job.state == JobState.SUCCESS, Job.attempt > 1)
+    if outcome == "failed":
+        return Job.state == JobState.FAILED
+    if outcome == "no_gain":
+        return Job.state == JobState.SKIPPED_NO_GAIN
+    if outcome == "cancelled":
+        return Job.state == JobState.CANCELLED
+    if outcome == "active":
+        return Job.state.in_(_ACTIVE_STATES)
+    if outcome == "finished":
+        return Job.state.not_in(_ACTIVE_STATES)
+    raise HTTPException(422, f"issue inconnue : {outcome}")
+
+
+_SORTS: dict[str, Any] = {
+    "recent": (Job.id.desc(),),
+    "duration": (Job.duration_s.desc().nulls_last(), Job.id.desc()),
+    "gain": (Job.bytes_saved.desc().nulls_last(), Job.id.desc()),
+    "size": (Job.src_size_bytes.desc().nulls_last(), Job.id.desc()),
+    "attempt": (Job.attempt.desc(), Job.id.desc()),
+}
 
 
 @router.get("", response_model=schemas.JobPage)
@@ -25,10 +56,19 @@ async def list_jobs(
     session: AsyncSession = Depends(get_db),
     library_id: int | None = None,
     state: JobState | None = None,
+    outcome: str | None = Query(
+        default=None,
+        pattern="^(success|recovered|failed|no_gain|cancelled|active|finished)$",
+    ),
+    failure_category: str | None = None,
+    strategy: str | None = None,
+    media_file_id: int | None = None,
+    dry_run: bool | None = None,
     codec: str | None = None,
     date_from: datetime.datetime | None = None,
     date_to: datetime.datetime | None = None,
     search: str | None = None,
+    sort: str = Query(default="recent", pattern="^(recent|duration|gain|size|attempt)$"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> schemas.JobPage:
@@ -39,6 +79,16 @@ async def list_jobs(
         conditions.append(Job.library_id == library_id)
     if state is not None:
         conditions.append(Job.state == state)
+    if outcome:
+        conditions.append(_outcome_condition(outcome))
+    if failure_category:
+        conditions.append(Job.failure_category == failure_category)
+    if strategy:
+        conditions.append(Job.strategy == strategy)
+    if media_file_id is not None:
+        conditions.append(Job.media_file_id == media_file_id)
+    if dry_run is not None:
+        conditions.append(Job.dry_run.is_(dry_run))
     if codec:
         conditions.append(Job.dst_codec == codec)
     if date_from is not None:
@@ -54,7 +104,7 @@ async def list_jobs(
     rows = (
         (
             await session.execute(
-                stmt.order_by(Job.id.desc()).limit(limit).offset(offset)
+                stmt.order_by(*_SORTS[sort]).limit(limit).offset(offset)
             )
         )
         .scalars()
@@ -126,8 +176,15 @@ async def retry_job(job_id: int, session: AsyncSession = Depends(get_db)) -> sch
     mf = await session.get(MediaFile, job.media_file_id)
     if mf is None:
         raise HTTPException(404, "fichier associé introuvable")
-    mf.status = MediaStatus.QUEUED
-    mf.retry_count = 0
-    mf.next_attempt_at = None
-    mf.last_error = None
-    return schemas.ActionResult(ok=True, detail="fichier remis en file d'attente")
+    if mf.status is MediaStatus.PROCESSING:
+        raise HTTPException(409, "fichier en cours de traitement")
+    if mf.status is MediaStatus.DONE:
+        # Ancien échec d'un fichier réussi depuis : relancer réencoderait
+        # le fichier déjà produit (utiliser « Forcer » si c'est voulu)
+        raise HTTPException(409, "fichier déjà traité avec succès depuis cette tentative")
+    if mf.status is MediaStatus.QUEUED:
+        raise HTTPException(409, "fichier déjà en file d'attente")
+    reset_for_retry(mf)
+    return schemas.ActionResult(
+        ok=True, detail="fichier remis en file : nouvelle série depuis la stratégie standard"
+    )

@@ -24,6 +24,8 @@ def run_migrations() -> None:
     """`alembic upgrade head` sur la base configurée par l'environnement."""
     cfg = Config(str(_APP_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(_APP_ROOT / "alembic"))
+    # Logs gérés par l'application : env.py ne doit pas les reconfigurer
+    cfg.attributes["configure_logger"] = False
     logger.info("Application des migrations Alembic (upgrade head)")
     command.upgrade(cfg, "head")
     logger.info("Migrations à jour")

@@ -80,7 +80,10 @@ export function useQueueSocket(): { active: ActiveJob[]; connected: boolean } {
           case "job_no_gain":
           case "scan_finished": {
             void qc.invalidateQueries({ queryKey: ["files"] });
+            void qc.invalidateQueries({ queryKey: ["file"] });
             void qc.invalidateQueries({ queryKey: ["queue"] });
+            void qc.invalidateQueries({ queryKey: ["stats"] });
+            void qc.invalidateQueries({ queryKey: ["jobs"] });
             break;
           }
           default:

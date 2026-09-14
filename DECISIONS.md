@@ -275,3 +275,191 @@ dossier sans fichiers cachés ; remote : github.com/literalynn/transcodarr.
   bouton de la sidebar disparaît). Chaînes personnelles neutralisées.
   Grille des bitrates scrollable sur mobile. Favicon SVG. README réécrit
   en anglais générique pour publication GitHub.
+
+## 2026-09-14 — Fiabilisation (0.10.0) : analyse des échecs de production, pré-vol, replis, UI unifiée
+
+**Constat (données réelles de l'instance, 106 319 jobs).** Taux d'échec
+affiché 45,8 %, mais seulement **436 fichiers** derrière les 48 698 échecs :
+
+1. **Boucle de re-tentatives infinie** (cause majeure du taux). Sur échec,
+   `applied_rule_hash` n'était jamais écrit ; le scan voyait « règle
+   changée » (None ≠ hash), remettait `retry_count` à 0 et relançait.
+   Jusqu'à 174 tentatives pour le même épisode (3 par jour depuis juillet),
+   ~825 h de calcul perdues sur l'échantillon importé.
+2. **Codes de sortie 218/234** : AVERROR tronquées sur 8 bits (256−38 =
+   ENOSYS, 256−22 = EINVAL). Logs : `Subtitle codec 94213 is not supported`
+   (mov_text des MP4 copié en MKV) et `Only audio, video, and subtitles are
+   supported for Matroska` (piste data tmcd). Reproduits à l'identique en
+   local, ainsi qu'un cas latent : audio `pcm_bluray`/`pcm_dvd` (m2ts/VOB).
+3. **Contrôle d'intégrité faux positif** : il décodait TOUTES les pistes,
+   donc l'audio copié bit à bit dont les trames abîmées préexistaient dans
+   la source (`[ac3] expacc out-of-range`, `[mp3float] Header missing`) ou
+   le bruit du muxer null (`non monotonically increasing dts`).
+4. **Contrôle de durée faux positif** : durées CONTENEUR comparées. Une
+   durée Matroska allongée par un sous-titre (événement ASS prolongé) ou
+   estimée depuis le débit audio (AVI DivX) échouait alors que les pistes
+   étaient identiques (Δ jusqu'à 3 606 s sur des épisodes de 24 min).
+5. **« 5_integrity : erreurs : » sans message** (20 fichiers, 217 jobs) :
+   code ≠ 0 sans stderr, cause non confirmable sans accès au serveur —
+   profil d'un décodeur qui s'arrête sur signal. Diagnostic désormais
+   enregistré (code, signal) plutôt que deviné.
+6. **Encodages sans gain prévisibles** : sur ~700 jobs échantillonnés,
+   293/297 « gain insuffisant » avaient un bitrate vidéo source < cible,
+   contre 2/392 succès (tous deux à 0,98×cible).
+
+**Décisions.**
+- **Échec définitif = définitif** : le hash de la règle est mémorisé sur
+  échec ; le scan ne relance un `failed` que si le fichier (taille/mtime)
+  ou la règle change, ou pour les échecs levés par le scan lui-même
+  (sonde, règle absente). Les échecs transitoires restent `queued` avec
+  backoff et ne deviennent `failed` qu'une fois épuisés.
+- **Plan de pistes** (`core/stream_plan.py`) décidé avant l'encodage et
+  traduit en mapping EXPLICITE (vidéo d'abord, `-c:N` par piste de sortie) :
+  mov_text & co → SubRip, PCM Blu-ray/DVD → FLAC (sans perte), data et
+  pièces jointes sans type MIME exclues, motif enregistré par piste.
+  L'attendu du contrôle 6 vient du plan. Plus de `-map 0 -c copy` aveugle.
+- **Classification des échecs** (`core/failures.py`) : catégorie stable
+  (TEXT, pas d'ENUM PG) + lignes d'erreur filtrées (bruit libva retiré).
+  Historique reclassé en tâche de fond au démarrage, numéros de tentative
+  reconstitués par la migration 0004.
+- **Stratégies de repli cumulatives** (`core/strategy.py`) : standard →
+  tolérant (`+genpts+discardcorrupt`, `-err_detect ignore_err`,
+  `-max_error_rate 1`) → pistes strictes (liste blanche) → autre API GPU
+  (QSV ↔ VAAPI, testée au démarrage). La catégorie choisit le repli ;
+  une stratégie déjà tentée ou de niveau inférieur n'est jamais rejouée ;
+  garde-fou de 6 tentatives par série. Toutes restent soumises aux mêmes
+  validations bloquantes.
+- **Pré-vol** (`core/preflight.py`) : source lisible et stable (modifiée
+  depuis < 120 s = copie en cours, retentée), sonde, gain atteignable,
+  test de décodage vidéo de 3 × 3 s (erreurs → départ direct en tolérant ;
+  artefacts normaux après seek sur GOP ouvert filtrés). La prédiction de
+  gain est optimiste (sortie à 80 % de la cible, 10e centile mesuré) et
+  fondée sur le RAPPORT des bitrates : une durée conteneur fausse ne peut
+  pas faire écarter un fichier. Bitrate seulement estimable : pas d'avis
+  au scan, durée réelle mesurée au pré-vol. « Forcer » contourne.
+- **Validation** : intégrité = vidéo seule (seule piste réencodée) avec
+  seconde passe mono-thread si le décodeur s'arrête sans message, délai
+  proportionnel à la durée ; durée = second avis sur les horodatages réels
+  des paquets (vidéo + 1re piste audio) quand les durées conteneur
+  divergent, lecture de fin de fichier (quelques ms), parcours complet
+  seulement si nécessaire.
+- **UI** : Dashboard et Statistiques fusionnés (période 24 h / 7 j / 30 j /
+  tout, taux de réussite, réussite au 1er essai, causes d'échec avec
+  relance par cause) ; Historique intégré à la Queue (onglets En attente /
+  En cours / Historique filtrable / Échecs par fichier avec sélection et
+  relance) ; fenêtre de diagnostic commune (cause en clair, remède,
+  décision automatique, lignes d'erreur, pré-vol, plan de pistes,
+  validation, chronologie des tentatives). `/history` et `/stats` redirigés.
+  Palette des graphiques validée (daltonisme/contraste) dans les deux thèmes.
+
+**Vérifications.** 383 tests verts contre PostgreSQL 16 (dont 4 scénarios
+de bout en bout rejouant les échecs de production : MP4 mov_text+data réussi
+au 1er essai, repli qui récupère, échec définitif non relancé par le scan,
+écartement sans encodage), mypy strict, ruff, build Vite. UI vérifiée sur un
+import local de ~60 000 jobs réels (bureau et mobile, FR/EN). Non vérifiable
+hors du serveur : comportement exact de jellyfin-ffmpeg 7.1 + QSV sur les
+fichiers réels (les correctifs de mux ont été reproduits avec FFmpeg 9 et
+libx265 ; les messages des muxers concernés sont identiques).
+
+## 2026-09-14 — Sous-titres : réencoder sans perte, ne jamais toucher aux ASS
+
+**Règle (demande explicite de l'utilisateur).** Un réencodage ASS casse très
+souvent la mise en page des fansubs : **les pistes ASS/SSA ne sont jamais
+réencodées ni exclues**, quelle que soit la stratégie. Seuls les formats dont
+le réencodage ne perd rien sont reconstruits en repli : SubRip et texte brut
+→ SubRip (paquets et horodatages refaits). WebVTT (réglages de position) et
+sous-titres image restent copiés. Restent convertis les seuls formats qu'il
+FAUT convertir pour conserver la piste en Matroska (mov_text, CEA-608,
+microDVD…, télétexte en tentative).
+
+**Mise en œuvre.** Nouvelle stratégie `reencode_subs` entre `tolerant` et
+`safe_streams` ; une erreur de sous-titres passe par elle AVANT toute
+exclusion, et `safe_streams` n'exclut que l'impossible (codec inconnu non
+écrivable, jamais un ASS). Un repli n'est tenté que s'il change réellement
+la commande pour ce fichier (empreinte du plan de pistes + options
+d'entrée) : un fichier dont les sous-titres sont en ASS n'enchaîne plus
+d'encodages identiques voués au même échec.
+
+## 2026-09-14 — Tests en production : cinq corrections issues des fichiers réels
+
+Banc d'essai non destructif (sortie hors médias, sans écriture en base) puis
+passage réel par la file, sur un fichier de chaque catégorie d'échec.
+
+1. **Sous-titres ASS déplacés par `-analyzeduration/-probesize 200M`** (ajouté
+   le 16/07). Sur un MKV, le muxer reçoit alors un paquet de sous-titres
+   tardif en premier et « corrige » tous les suivants (`Non-monotonic DTS …
+   changing to`) : 5 057 événements empilés à 23:00 sur un épisode d'anime.
+   Reproduit et isolé (même 20M suffit ; valeurs par défaut : 0 correction).
+   En Matroska/MP4 le codec vient de l'en-tête : sonde agrandie réservée aux
+   TS/VOB/AVI. Audit des logs : 28 fichiers remplacés depuis juillet portent
+   des corrections (13 épisodes d'une même saison gravement, 5 films 10-40 s, le reste
+   ≤ 3 s) ; les 2 originaux encore en corbeille ont été restaurés (encodage
+   fautif conservé à côté) et réencodés.
+2. **Nouveau contrôle bloquant 6b « minutage des pistes copiées »** : relevé
+   des `Non-monotonic DTS` du log d'encodage ; décalage > 250 ms d'une piste
+   copiée = échec, original conservé. Il a immédiatement refusé un remux dont
+   les blocs PGS sont désordonnés dans la source (669 paquets, 38,9 s) — que
+   la 0.9 avait remplacé la veille.
+3. **Assemblage mkvmerge** (stratégie `mkvmerge_mux`, repli de 6b et des
+   erreurs de mux) : FFmpeg n'encode que la vidéo et les conversions, mkvmerge
+   recopie audio/sous-titres/polices/chapitres de la source. Mesuré : timing
+   identique à la microseconde près, y compris sur la source désordonnée où
+   FFmpeg déplaçait 1 338 paquets. Repli seulement : le chemin FFmpeg reste
+   le défaut (exact sur les sources ordonnées, déjà validé).
+4. **Intégrité « vidéo seule » encore polluée** : même avec `-map 0:v:0`,
+   l'ouverture du fichier décode quelques trames de toutes les pistes ;
+   « [mp3float] Header missing » d'une piste copiée faisait échouer ~170
+   fichiers. Filtrage par composant FFmpeg (audio, sous-titres, muxer null).
+5. **Durée réelle des AVI** : après un seek, le demuxer AVI recalcule les
+   horodatages depuis l'index de l'en-tête (1 485 s au lieu de 1 471,5 s en
+   lecture séquentielle) → parcours séquentiel pour les conteneurs aux
+   horodatages approximatifs. Aussi : « first frame is no keyframe » (VC-1
+   après seek) classé normal ; la config de logs d'Alembic coupait tous les
+   logs applicatifs après la migration (`disable_existing_loggers`).
+
+6. **Garde anti-upgrade : référence = date relevée au démarrage du job**, plus
+   la date du dernier scan. Constat : un service externe au transcodeur
+   retouche chaque fichier remplacé ~1 min après (mtime et ctime ; la
+   restauration de date par Transcodarr est vérifiée correcte sur le NFS hors
+   bibliothèque) ; tout fichier retouché entre scan et job était annulé à tort
+   (« source modifiée pendant l'encodage »), encodage perdu.
+
+Résultats réels : les 7 catégories d'échec sélectionnées passent (gains 11 à
+74 %) ou sont écartées à juste titre avant encodage (gain prédit −24 %,
+mesuré −25 %) ; 0 échec sur 8 fichiers relancés par la file.
+
+## 2026-09-15 — Revue du code 0.10.0 et dashboard : périodes partout, donut des codecs
+
+**Période des statistiques.** Le sélecteur 24 h / 7 j / 30 j / Tout filtre
+désormais toutes les statistiques d'activité : tentatives, causes d'échec,
+espace récupéré, débit d'encodage et gain par bucket (KPI compris). Les
+cartes d'état (codecs, progression, fichiers restants, ressources) décrivent
+la bibliothèque actuelle ; le titre des cartes filtrées rappelle la période.
+- Périodes **alignées** : 24 créneaux horaires pour 24 h (heure en cours
+  comprise), sinon N jours calendaires UTC. Mêmes bornes pour toutes les
+  cartes : les totaux concordent d'une carte à l'autre.
+- Courbes renvoyées **avec tous les créneaux**, vides compris (axe du temps
+  régulier) ; granularité heure (24 h ou historique ≤ 2 jours), jour, semaine
+  au-delà de 3 mois. Créneaux calculés en UTC côté SQL
+  (`date_trunc(timezone('UTC', …))`) quel que soit le fuseau de la session.
+- Endpoints `savings-over-time` et `throughput` : enveloppe `{unit, points,
+  totaux}` au lieu d'une liste ; `reliability.per_day` → `timeline`.
+
+**Répartition des codecs : donut** (retour utilisateur : plus lisible que les
+barres). Couleur attachée au codec, jamais au rang : HEVC, AV1, H.264 dans
+l'ordre des séries validé (bleu, orange, aqua — paires distinguables en
+daltonisme, thèmes clair et sombre) ; le reste regroupé en « Autres » gris,
+détaillé dans la légende. Légende avec pourcentages et effectifs à côté du
+cercle (l'aqua clair est sous 3:1 : l'étiquette directe est obligatoire).
+
+**Corrections issues de la revue :**
+- ETA de la file multipliée par le nombre de workers (durée moyenne × fichiers
+  en file, sans tenir compte du parallélisme) ; moyenne désormais sur les 50
+  derniers encodages, indépendante des périodes d'inactivité.
+- Contrôle 6b : un job repris après crash réutilise son log ; seules les
+  lignes de la tentative en cours sont lues (décalage mémorisé au pré-vol),
+  sinon les corrections d'un essai interrompu faisaient échouer le suivant.
+- Intermédiaire mkvmerge supprimé aussi en cas d'erreur inattendue.
+- Scan : un fichier « sans gain » réévalué après changement de règle mémorise
+  la nouvelle règle (plus de réévaluation à chaque scan) ; un fichier en file
+  au milieu d'une série de replis garde sa dernière erreur affichée.
