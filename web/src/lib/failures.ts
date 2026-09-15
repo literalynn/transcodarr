@@ -63,7 +63,8 @@ export const FAILURE_CATEGORIES: Record<string, FailureMeta> = {
   },
   source_busy: {
     label: "Source en cours d'écriture",
-    explanation: "Le fichier vient d'être modifié : une copie (Radarr/Sonarr) est probablement en cours.",
+    explanation:
+      "Le fichier vient d'être modifié ou a été remplacé pendant la lecture : copie Radarr/Sonarr en cours, ou NAS.",
     remedy: "Nouvel essai automatique après un délai.",
     group: "environment",
   },

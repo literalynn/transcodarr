@@ -214,6 +214,13 @@ _PATTERNS: tuple[tuple[re.Pattern[str], FailureCategory, str], ...] = (
         "permission refusée",
     ),
     (
+        # NFS : fichier remplacé ou déplacé côté NAS pendant la lecture
+        # (constaté en production sur deux épisodes au même instant)
+        re.compile(r"Stale file handle", re.I),
+        FailureCategory.SOURCE_BUSY,
+        "source modifiée ou déplacée pendant la lecture (NAS, *arr)",
+    ),
+    (
         re.compile(
             r"Failed to (?:create|initialise|initialize) (?:a )?(?:VAAPI|QSV|VA) |"
             r"Device creation failed|No VA display found|Failed to set value 'qsv=|"

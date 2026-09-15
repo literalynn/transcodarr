@@ -502,3 +502,27 @@ bouton de la page Queue avec aperçu chiffré) :
   du scan, est rejouée depuis la base. Gain prévu insuffisant → confirmé sans
   encoder (règle mémorisée) ; sinon → remis en file, nouvelle série complète.
 Rien n'est remis en file sans passer à nouveau le pré-vol et les validations.
+
+## 2026-09-15 — Retours des 16 premières heures de 0.10 (0.10.2)
+
+345 réussites, 15 tentatives en échec sur 10 fichiers ; 6 récupérés par les
+replis (mkvmerge sur 3 films aux sous-titres PGS désordonnés, tolérant sur 2
+coupures NFS…), 4 en échec définitif. Corrections :
+
+- **Contrôle 6b et vidéo réencodée** : deux films (un WEB-DL, un remux)
+  échouaient définitivement pour 27 et 10 DTS réalignés sur
+  la VIDÉO. Vérifié dans les sources : trous d'images de 6 s (582→588 s,
+  2280→2286 s) et de 0,6 à 2 s ; l'encodeur sort quelques DTS en recul à
+  chaque trou, les images gardent leur instant d'affichage. Tolérées sur la
+  vidéo réencodée jusqu'à 0,5 % des images (50 minimum) ; audio et
+  sous-titres copiés restent au seuil strict de 250 ms.
+- **« Stale file handle »** (fichier remplacé côté NAS pendant la lecture,
+  deux épisodes au même instant) : classé « source en cours d'écriture »,
+  nouvel essai après délai, au lieu de « cause inconnue » + repli tolérant.
+- **Fichiers vides** : 15 épisodes de 0 octet (déjà vides à leur découverte en
+  juillet, jamais traités) affichaient « EBML header parsing failed » ; le
+  scan indique désormais « fichier vide (0 octet) : à re-télécharger » sans
+  lancer ffprobe.
+
+Échec définitif légitime conservé : un MKV multi-segments corrompu (épisode
+spécial) dont l'audio saute de 269 s — mkvmerge n'y voit que 3 pistes sur 9.

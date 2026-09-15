@@ -340,7 +340,8 @@ const EN: Record<string, string> = {
   "Le fichier produit n'a pas toutes les pistes audio/sous-titres prévues.": "The output file lacks some planned audio/subtitle tracks.",
   "Le fichier produit n'est pas dans le codec cible.": "The output file is not in the target codec.",
   "Le fichier validé n'a pas pu remplacer l'original (l'original est intact).": "The validated file could not replace the original (the original is intact).",
-  "Le fichier vient d'être modifié : une copie (Radarr/Sonarr) est probablement en cours.": "The file was just modified: a copy (Radarr/Sonarr) is probably in progress.",
+  "Le fichier vient d'être modifié ou a été remplacé pendant la lecture : copie Radarr/Sonarr en cours, ou NAS.":
+    "The file was just modified or replaced while being read: a Radarr/Sonarr copy in progress, or the NAS.",
   "Le muxer n'a pas pu écrire l'en-tête du fichier de sortie.": "The muxer could not write the output file header.",
   "Le processus d'encodage s'est arrêté brutalement (signal).": "The encoding process stopped abruptly (signal).",
   "Les pistes du fichier produit ne durent pas autant que celles de la source (troncature).": "The output tracks are shorter than the source tracks (truncation).",

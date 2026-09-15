@@ -99,6 +99,9 @@ class FileFacts:
     fresh_probe_ok: bool = False
 
 
+EMPTY_FILE_ERROR = "fichier vide (0 octet) : à re-télécharger"
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     status: MediaStatus
@@ -414,6 +417,10 @@ async def scan_library(
             result.unchanged += 1
         else:
             try:
+                if st.st_size == 0:
+                    # Constaté en production : 15 épisodes de 0 octet importés
+                    # tels quels ; « EBML header parsing failed » n'aidait personne
+                    raise ProbeError(EMPTY_FILE_ERROR)
                 probe = await probe_file(path, config.ffprobe_path)
             except ProbeError as exc:
                 result.failed_probe += 1
@@ -425,7 +432,9 @@ async def scan_library(
                 mf.mtime = mtime
                 mf.ctime = ctime
                 mf.status = MediaStatus.FAILED
-                mf.last_error = f"sonde ffprobe impossible : {exc}"
+                mf.last_error = (
+                    EMPTY_FILE_ERROR if st.st_size == 0 else f"sonde ffprobe impossible : {exc}"
+                )
                 mf.failure_category = FailureCategory.SOURCE_UNREADABLE.value
                 continue
             if mf is None:

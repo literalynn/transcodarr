@@ -70,6 +70,19 @@ def test_pcm_bluray_is_mux_audio() -> None:
     assert classify_ffmpeg_failure(234, log).category is FailureCategory.MUX_AUDIO
 
 
+def test_stale_nfs_handle_is_transient() -> None:
+    from transcoder.core.strategy import is_transient
+
+    log = (
+        "[in#0/avi @ 0x55caf80c2440] Error during demuxing: Stale file handle\n"
+        "[vost#0:0/av1_qsv @ 0x55caf8088fc0] Error submitting a packet to the muxer: Bad file descriptor\n"
+        "[out#0/matroska @ 0x55caf81aca80] Error writing trailer: Bad file descriptor\n"
+    )
+    f = classify_ffmpeg_failure(247, log)
+    assert f.category is FailureCategory.SOURCE_BUSY
+    assert is_transient(f.category)
+
+
 def test_signals() -> None:
     assert classify_ffmpeg_failure(-11, "").category is FailureCategory.ENCODER_CRASH
     assert classify_ffmpeg_failure(-9, "").category is FailureCategory.INTERRUPTED

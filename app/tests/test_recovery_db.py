@@ -343,6 +343,20 @@ async def test_terminal_failure_is_not_requeued_by_scan(env: Env) -> None:
     assert jobs[-1].state is JobState.SUCCESS and jobs[-1].attempt == 1  # type: ignore[attr-defined]
 
 
+async def test_empty_file_is_reported_as_such(env: Env) -> None:
+    from transcoder.core.failures import FailureCategory
+    from transcoder.core.scanner import EMPTY_FILE_ERROR
+    from transcoder.enums import MediaStatus
+
+    (env.media_dir / "episode-vide.mkv").write_bytes(b"")
+    await _scan(env)
+    jobs, mf = await _jobs_and_file(env)
+    assert jobs == []
+    assert mf.status is MediaStatus.FAILED  # type: ignore[attr-defined]
+    assert mf.last_error == EMPTY_FILE_ERROR  # type: ignore[attr-defined]
+    assert mf.failure_category == FailureCategory.SOURCE_UNREADABLE.value  # type: ignore[attr-defined]
+
+
 async def test_hopeless_gain_is_skipped_without_encoding(env: Env) -> None:
     """Source déjà sous la cible : pas de job d'encodage, statut sans gain."""
     from sqlalchemy import update

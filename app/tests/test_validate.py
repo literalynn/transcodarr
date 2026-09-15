@@ -367,6 +367,46 @@ def test_shifted_ass_events_fail_validation() -> None:
     assert f.category is FailureCategory.SUBTITLE_TIMING
 
 
+# Log RÉEL (film WEB-DL 2160p) : trous d'images de 6 s dans la source,
+# l'encodeur QSV sort 2 DTS en recul à chaque trou
+WEBDL_VIDEO_GAPS = "".join(
+    f"[vost#0:0/hevc_qsv @ 0x56053e208f80] Non-monotonic DTS; previous: {p}, current: {p - s}; "
+    f"changing to {p}. This may result in incorrect timestamps in the output file.\n"
+    for p in (588505, 2286201, 2652567, 2778693, 3145059, 3631545, 3751581)
+    for s in (5965, 5923)
+)
+
+
+def test_encoded_video_corrections_at_source_gaps_are_tolerated() -> None:
+    from transcoder.core.validate import check_copied_timestamps
+
+    r = check_copied_timestamps(WEBDL_VIDEO_GAPS, matroska_output=True, duration_s=6060)
+    assert r.ok, r.detail
+    assert r.meta is not None and r.meta["corrections"] == {"v": 14}
+
+
+def test_widespread_video_corrections_still_fail() -> None:
+    from transcoder.core.validate import check_copied_timestamps, video_corrections_allowed
+
+    allowed = video_corrections_allowed(1440)  # épisode de 24 min
+    assert allowed == 172
+    line = (
+        "[vost#0:0/av1_qsv @ 0x1] Non-monotonic DTS; previous: 90000, current: 80000; "
+        "changing to 90000. This may result in incorrect timestamps in the output file.\n"
+    )
+    assert not check_copied_timestamps(line * (allowed + 1), matroska_output=True, duration_s=1440).ok
+
+
+def test_video_tolerance_never_hides_shifted_subtitles() -> None:
+    from transcoder.core.validate import check_copied_timestamps
+
+    r = check_copied_timestamps(
+        WEBDL_VIDEO_GAPS + PROD_LOG_ASS_SHIFTED, matroska_output=True, duration_s=6060
+    )
+    assert not r.ok
+    assert "sous-titres" in r.detail and "vidéo" not in r.detail
+
+
 def test_tiny_corrections_tolerated_in_matroska() -> None:
     from transcoder.core.validate import check_copied_timestamps
 

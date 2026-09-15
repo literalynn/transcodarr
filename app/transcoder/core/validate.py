@@ -212,6 +212,13 @@ _DTS_CORRECTION = re.compile(
 # Décalage maximal toléré (ms, base de temps Matroska) : au-delà, le
 # minutage d'un sous-titre ou d'un son est visiblement/audiblement changé
 MAX_TIMESTAMP_SHIFT_MS = 250
+# Vidéo RÉENCODÉE (la seule piste vidéo du plan de pistes) : aux trous
+# d'horodatage de la SOURCE (images manquantes : 6 s constatées sur un WEB-DL,
+# 0,6 à 2 s sur un remux Blu-ray), l'encodeur produit quelques DTS en recul
+# que FFmpeg réaligne. Les images gardent leur ordre et leur instant
+# d'affichage : tolérées tant qu'elles restent ponctuelles.
+VIDEO_CORRECTIONS_MIN_ALLOWED = 50
+VIDEO_CORRECTIONS_MAX_SHARE = 0.005  # part des images (24 i/s supposées)
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,13 +245,23 @@ def parse_dts_corrections(log: str) -> TimestampCorrections:
     return TimestampCorrections(count=count, max_shift_ms=max_shift, worst_stream=worst)
 
 
-def check_copied_timestamps(log: str | None, *, matroska_output: bool) -> CheckResult:
+def video_corrections_allowed(duration_s: float | None) -> int:
+    """Corrections de DTS tolérées sur la vidéo réencodée (pur)."""
+    frames = (duration_s or 0.0) * 24.0
+    return max(VIDEO_CORRECTIONS_MIN_ALLOWED, int(frames * VIDEO_CORRECTIONS_MAX_SHARE))
+
+
+def check_copied_timestamps(
+    log: str | None, *, matroska_output: bool, duration_s: float | None = None
+) -> CheckResult:
     """Contrôle 6b : aucune piste copiée n'a été décalée par FFmpeg.
 
     Protège en particulier les sous-titres ASS (typesetting) : un décalage
     de paquets les casse sans que les durées ni le nombre de pistes ne
     changent. Les corrections d'une milliseconde (sous-titres image aux
-    segments de même horodatage) restent tolérées et sont rapportées."""
+    segments de même horodatage) restent tolérées et sont rapportées, comme
+    les corrections ponctuelles de la vidéo réencodée aux trous d'images de
+    la source."""
     if log is None:
         return CheckResult("6b_timestamps", True, "log d'encodage indisponible : contrôle ignoré")
     corrections = parse_dts_corrections(log)
@@ -258,13 +275,17 @@ def check_copied_timestamps(log: str | None, *, matroska_output: bool) -> CheckR
     # Base de temps des messages : milliseconde en Matroska ; ailleurs, le
     # décalage n'est pas convertible de façon sûre → toute correction compte
     limit = MAX_TIMESTAMP_SHIFT_MS if matroska_output else 0
+    video_allowed = video_corrections_allowed(duration_s)
     problems = [
         f"{labels.get(kind, kind)} (piste de sortie #{corrections.worst_stream[kind]}) : "
         f"{corrections.count[kind]} paquet(s) déplacé(s), jusqu'à "
         f"{corrections.max_shift_ms[kind] / 1000:.2f} s"
         for kind in sorted(corrections.count)
         if corrections.max_shift_ms[kind] > limit
+        and not (kind == "v" and corrections.count[kind] <= video_allowed)
     ]
+    if "v" in corrections.count:
+        meta["video_allowed"] = video_allowed
     summary = ", ".join(
         f"{labels.get(k, k)} {n} (max {corrections.max_shift_ms[k]} ms)"
         for k, n in sorted(corrections.count.items())
@@ -829,7 +850,9 @@ async def validate_output(
         except OSError:
             log_text = None
     c6b = check_copied_timestamps(
-        log_text, matroska_output=dst_path.lower().endswith((".mkv", ".mka"))
+        log_text,
+        matroska_output=dst_path.lower().endswith((".mkv", ".mka")),
+        duration_s=src_probe.duration_s,
     )
     if not c6b.ok:
         return _fail(c6b)
