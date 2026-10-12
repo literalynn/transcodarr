@@ -1,4 +1,4 @@
-# Un seul fichier, deux services (§9.2). Tout ce qui varie passe par .env.
+# Two services, one file. Everything that varies lives in .env.
 services:
   db:
     image: postgres:16
@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      # bind-mount (pas de volume nommé) : tout l'état sauvegardable au tar (§9.1)
+      # bind mount (not a named volume): all state can be backed up with tar
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -21,12 +21,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # Jamais root : uid/gid de l'utilisateur propriétaire des médias
+    # Never root: uid/gid of the user that owns your media
     user: "${PUID}:${PGID}"
-    # PERFMON : requis par intel_gpu_top (utilisation GPU du dashboard)
+    # PERFMON: required by intel_gpu_top (dashboard GPU usage)
     cap_add:
       - PERFMON
-    # GID numérique du groupe render de l'HÔTE (le nom n'existe pas ici)
+    # Numeric GID of the HOST render group (the name doesn't exist in the container)
     group_add:
       - "${RENDER_GID}"
     devices:
@@ -50,8 +50,8 @@ services:
       PUID: ${PUID}
       PGID: ${PGID}
     volumes:
-      # MÊME chemin absolu hôte et conteneur : les chemins en base sont
-      # valides des deux côtés, ajout de bibliothèque sans toucher ce fichier
+      # SAME absolute path on host and in container: paths stored in the DB
+      # are valid on both sides, and new libraries never need a compose edit
       - ${MEDIA_ROOT}:${MEDIA_ROOT}
       - ./data:/data
     healthcheck:

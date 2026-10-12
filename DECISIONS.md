@@ -526,3 +526,18 @@ coupures NFS…), 4 en échec définitif. Corrections :
 
 Échec définitif légitime conservé : un MKV multi-segments corrompu (épisode
 spécial) dont l'audio saute de 269 s — mkvmerge n'y voit que 3 pistes sur 9.
+
+## 2026-10-12 — Passage en dépôt public
+
+- **Seed générique** : bibliothèques d'exemple « Movies », « TV Shows »,
+  « Anime » sous `MEDIA_ROOT` (au lieu de chemins `/srv/storage` en dur),
+  GPU nommé « Intel GPU ». Matrices de bitrate inchangées. Le seed des
+  bibliothèques ne s'exécute plus qu'au premier démarrage (`app_settings`
+  vide) : supprimer toutes ses bibliothèques ne les fait plus revenir.
+  Sans effet sur une instance existante.
+- **Scripts et `.env.example` en anglais** ; `make_sample_set.sh` prend par
+  défaut tous les dossiers de premier niveau de `MEDIA_ROOT` (cachés et
+  sandbox exclus), `--lib` pour restreindre. `restore.sh` attend « yes ».
+- **Export CSV** de l'historique : colonnes en anglais.
+- Titres de la médiathèque retirés des notes et des tests. Licence GPL-3.0,
+  SPEC.md (prompt d'origine) retiré.

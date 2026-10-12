@@ -271,9 +271,9 @@ const OUTCOMES: { value: string; label: string }[] = [
 
 function toCsv(jobs: Job[]): string {
   const header = [
-    "date", "fichier", "bibliotheque", "etat", "cause", "strategie", "tentative",
-    "codec_avant", "codec_apres", "taille_avant", "taille_apres", "gain_octets",
-    "gain_pourcent", "duree_s", "erreur",
+    "date", "file", "library", "status", "cause", "strategy", "attempt",
+    "codec_before", "codec_after", "size_before", "size_after", "gain_bytes",
+    "gain_percent", "duration_s", "error",
   ];
   const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
   const rows = jobs.map((j) =>
@@ -325,7 +325,7 @@ function HistoryTab({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "transcodarr-historique.csv";
+    a.download = "transcodarr-history.csv";
     a.click();
     URL.revokeObjectURL(url);
   };

@@ -23,19 +23,18 @@ BUCKETS: tuple[ResolutionBucket, ...] = (
     ResolutionBucket.P480,
 )
 
-LIBRARY_NAMES: tuple[str, ...] = ("Films", "Séries", "Animés")
+LIBRARY_NAMES: tuple[str, ...] = ("Movies", "TV Shows", "Anime")
 
-# Bibliothèques à seeder : (nom, chemin)
-SEED_LIBRARIES: tuple[tuple[str, str], ...] = (
-    ("Films", "/srv/storage/Films"),
-    ("Séries", "/srv/storage/Séries"),
-    ("Animés", "/srv/storage/Animés"),
-)
+
+def seed_libraries(media_root: str) -> tuple[tuple[str, str], ...]:
+    """Bibliothèques d'exemple à seeder : (nom, chemin) sous MEDIA_ROOT."""
+    root = media_root.rstrip("/")
+    return tuple((name, f"{root}/{name}") for name in LIBRARY_NAMES)
 
 # codec -> bibliothèque -> bucket -> (target_sdr_kbps, target_hdr_kbps)
 SEED_BITRATES: dict[Codec, dict[str, dict[ResolutionBucket, tuple[int, int]]]] = {
     Codec.HEVC: {
-        "Films": {
+        "Movies": {
             ResolutionBucket.P2160: (12000, 15000),
             ResolutionBucket.P1440: (8000, 10000),
             ResolutionBucket.P1080: (6000, 7500),
@@ -43,7 +42,7 @@ SEED_BITRATES: dict[Codec, dict[str, dict[ResolutionBucket, tuple[int, int]]]] =
             ResolutionBucket.P576: (1400, 1750),
             ResolutionBucket.P480: (1000, 1250),
         },
-        "Séries": {
+        "TV Shows": {
             ResolutionBucket.P2160: (8000, 12000),
             ResolutionBucket.P1440: (6000, 7500),
             ResolutionBucket.P1080: (4000, 5000),
@@ -51,7 +50,7 @@ SEED_BITRATES: dict[Codec, dict[str, dict[ResolutionBucket, tuple[int, int]]]] =
             ResolutionBucket.P576: (1100, 1375),
             ResolutionBucket.P480: (800, 1000),
         },
-        "Animés": {
+        "Anime": {
             ResolutionBucket.P2160: (8000, 10000),
             ResolutionBucket.P1440: (5000, 6250),
             ResolutionBucket.P1080: (4000, 5000),
@@ -61,7 +60,7 @@ SEED_BITRATES: dict[Codec, dict[str, dict[ResolutionBucket, tuple[int, int]]]] =
         },
     },
     Codec.AV1: {
-        "Films": {
+        "Movies": {
             ResolutionBucket.P2160: (9000, 11000),
             ResolutionBucket.P1440: (6000, 7500),
             ResolutionBucket.P1080: (4500, 5600),
@@ -69,7 +68,7 @@ SEED_BITRATES: dict[Codec, dict[str, dict[ResolutionBucket, tuple[int, int]]]] =
             ResolutionBucket.P576: (1050, 1300),
             ResolutionBucket.P480: (750, 950),
         },
-        "Séries": {
+        "TV Shows": {
             ResolutionBucket.P2160: (6000, 9000),
             ResolutionBucket.P1440: (4500, 5600),
             ResolutionBucket.P1080: (3000, 3750),
@@ -77,7 +76,7 @@ SEED_BITRATES: dict[Codec, dict[str, dict[ResolutionBucket, tuple[int, int]]]] =
             ResolutionBucket.P576: (850, 1050),
             ResolutionBucket.P480: (600, 750),
         },
-        "Animés": {
+        "Anime": {
             ResolutionBucket.P2160: (6000, 7500),
             ResolutionBucket.P1440: (3750, 4700),
             ResolutionBucket.P1080: (3000, 3750),
@@ -134,7 +133,7 @@ def iter_seed_rules() -> list[SeedRule]:
 
 
 # --- GPU initial ------------------------------------------------------------
-SEED_GPU: tuple[str, str, str, int] = ("Intel Arc A770", "/dev/dri/renderD128", "qsv", 1)
+SEED_GPU: tuple[str, str, str, int] = ("Intel GPU","/dev/dri/renderD128", "qsv", 1)
 
 
 def default_app_settings(

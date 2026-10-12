@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================================
-# restore.sh — restauration d'une sauvegarde backup.sh
+# restore.sh — restore a backup.sh archive
 #
-# Usage :
-#   ./scripts/restore.sh backups/transcoder-backup-XXXX.tar.gz          # DB complète
-#   ./scripts/restore.sh backups/transcoder-backup-XXXX.tar.gz --config # config JSON seule
+# Usage:
+#   ./scripts/restore.sh backups/transcoder-backup-XXXX.tar.gz          # full DB
+#   ./scripts/restore.sh backups/transcoder-backup-XXXX.tar.gz --config # JSON config only
 # ============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,23 +23,23 @@ trap 'rm -rf "$WORK"' EXIT
 tar -xzf "$ARCHIVE" -C "$WORK"
 
 if [[ "$MODE" == "--config" ]]; then
-    echo "Import de la configuration JSON via l'API (DB intacte)…"
+    echo "Importing JSON config through the API (database untouched)…"
     curl -fsS -X POST -H "Content-Type: application/json" \
         --data-binary "@$WORK/config.json" \
         "http://localhost:${HTTP_PORT}/api/v1/config/import"
     echo
-    echo "Config importée."
+    echo "Config imported."
     exit 0
 fi
 
-read -r -p "Restauration COMPLÈTE : la base actuelle sera écrasée. Confirmer ? (oui) " answer
-[[ "$answer" == "oui" ]] || { echo "Annulé."; exit 1; }
+read -r -p "FULL restore: the current database will be overwritten. Confirm? (yes) " answer
+[[ "$answer" == "yes" ]] || { echo "Cancelled."; exit 1; }
 
-echo "Arrêt de l'app (la DB reste up)…"
+echo "Stopping the app (database stays up)…"
 docker compose stop app
 echo "pg_restore…"
 docker compose exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
     --clean --if-exists --no-owner < "$WORK/db.dump"
-echo "Redémarrage…"
+echo "Restarting…"
 docker compose start app
-echo "Restauration terminée."
+echo "Restore complete."

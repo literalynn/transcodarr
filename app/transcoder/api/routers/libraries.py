@@ -67,10 +67,10 @@ async def create_library(
     )
     session.add(lib)
     await session.flush()
-    # Jeu complet de règles par défaut (échelle « Films » du §4) : la
+    # Jeu complet de règles par défaut (échelle « Movies ») : la
     # bibliothèque est fonctionnelle immédiatement, l'UI permet d'éditer.
     for codec in (Codec.HEVC, Codec.AV1):
-        for bucket, (sdr, hdr) in SEED_BITRATES[codec]["Films"].items():
+        for bucket, (sdr, hdr) in SEED_BITRATES[codec]["Movies"].items():
             for is_hdr, target in ((False, sdr), (True, hdr)):
                 session.add(
                     BitrateRule(

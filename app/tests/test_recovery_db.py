@@ -117,7 +117,7 @@ async def env(tmp_path: Path) -> AsyncIterator[Env]:
         )
         session.add_all([lib, gpu])
         await session.flush()
-        for bucket in SEED_BITRATES[Codec.HEVC]["Films"]:
+        for bucket in SEED_BITRATES[Codec.HEVC]["Movies"]:
             for is_hdr in (False, True):
                 session.add(
                     BitrateRule(

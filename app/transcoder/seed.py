@@ -22,9 +22,9 @@ from transcoder.enums import Codec, Container, DvPolicy, GpuApi, HdrPolicy
 from transcoder.models import AppSetting, BitrateRule, Gpu, Library
 from transcoder.seed_data import (
     SEED_GPU,
-    SEED_LIBRARIES,
     default_app_settings,
     iter_seed_rules,
+    seed_libraries,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,19 +32,24 @@ logger = logging.getLogger(__name__)
 
 async def apply_seed(session: AsyncSession, settings: Settings) -> bool:
     """Applique le seed. Retourne True si les bibliothèques ont été créées."""
-    created = await _seed_libraries_rules_gpu(session)
+    created = await _seed_libraries_rules_gpu(session, settings)
     await _seed_app_settings(session, settings)
     return created
 
 
-async def _seed_libraries_rules_gpu(session: AsyncSession) -> bool:
+async def _seed_libraries_rules_gpu(session: AsyncSession, settings: Settings) -> bool:
     count = await session.scalar(select(func.count()).select_from(Library))
     if count is not None and count > 0:
         logger.info("Seed bibliothèques ignoré : %d bibliothèque(s) déjà présente(s)", count)
         return False
+    # app_settings déjà remplie = pas le premier démarrage : l'utilisateur a
+    # supprimé toutes ses bibliothèques, on ne les recrée pas
+    if await session.scalar(select(func.count()).select_from(AppSetting)):
+        logger.info("Seed bibliothèques ignoré : pas le premier démarrage")
+        return False
 
     libs: dict[str, Library] = {}
-    for name, path in SEED_LIBRARIES:
+    for name, path in seed_libraries(settings.media_root):
         lib = Library(
             name=name,
             path=path,

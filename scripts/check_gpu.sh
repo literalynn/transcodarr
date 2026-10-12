@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================================
-# check_gpu.sh — diagnostic complet de la chaîne GPU Intel (§9.5.1)
+# check_gpu.sh — full diagnostic of the Intel GPU stack
 #
-# Usage :
-#   ./scripts/check_gpu.sh                # diagnostic sur l'hôte
-#   ./scripts/check_gpu.sh --container    # même diagnostic DANS le conteneur
+# Usage:
+#   ./scripts/check_gpu.sh                # diagnostic on the host
+#   ./scripts/check_gpu.sh --container    # same diagnostic INSIDE the container
 # ============================================================================
 set -uo pipefail
 
@@ -22,34 +22,34 @@ echo "== Kernel =="
 KVER=$(uname -r)
 KMAJ=${KVER%%.*}; KMIN=$(echo "$KVER" | cut -d. -f2)
 if [[ "$KMAJ" -gt 6 || ( "$KMAJ" -eq 6 && "$KMIN" -ge 2 ) ]]; then
-    ok "kernel $KVER (>= 6.2 requis pour l'Arc A770)"
+    ok "kernel $KVER (>= 6.2 required for Intel Arc)"
 else
-    ko "kernel $KVER trop ancien : >= 6.2 requis pour l'Arc (backports Debian)"
+    ko "kernel $KVER too old: >= 6.2 required for Intel Arc (e.g. Debian backports)"
 fi
 
-echo "== Nodes DRM =="
+echo "== DRM nodes =="
 if ls /dev/dri/renderD* >/dev/null 2>&1; then
     for node in /dev/dri/renderD*; do
         ok "$node ($(stat -c '%G gid=%g' "$node"))"
     done
 else
-    ko "aucun /dev/dri/renderD* — driver i915 chargé ? firmware-misc-nonfree installé ?"
+    ko "no /dev/dri/renderD* — is the i915/xe driver loaded? firmware-misc-nonfree installed?"
 fi
 
-echo "== Groupe render =="
+echo "== render group =="
 if RGID=$(getent group render | cut -d: -f3) && [[ -n "$RGID" ]]; then
-    ok "groupe render : GID $RGID (à mettre dans .env → RENDER_GID)"
+    ok "render group: GID $RGID (put it in .env → RENDER_GID)"
 else
     if [[ -e /dev/dri/renderD128 ]]; then
-        info "pas de groupe 'render' dans ce contexte — GID du node : $(stat -c '%g' /dev/dri/renderD128)"
+        info "no 'render' group in this context — node GID: $(stat -c '%g' /dev/dri/renderD128)"
     else
-        ko "groupe render introuvable"
+        ko "render group not found"
     fi
 fi
 if id | grep -qE "render|$(stat -c '%g' /dev/dri/renderD128 2>/dev/null || echo NOPE)"; then
-    ok "l'utilisateur courant a accès au groupe du node"
+    ok "current user can access the node's group"
 else
-    info "utilisateur courant hors groupe render (normal sur l'hôte si non configuré)"
+    info "current user is not in the render group (normal on the host if not configured)"
 fi
 
 echo "== VAAPI (vainfo) =="
@@ -57,59 +57,59 @@ VAINFO=$(command -v vainfo || echo /usr/bin/vainfo)
 if [[ -x "$VAINFO" ]]; then
     OUT=$("$VAINFO" --display drm --device /dev/dri/renderD128 2>&1)
     if echo "$OUT" | grep -q "VAProfileHEVCMain10.*Enc\|VAProfileHEVCMain10.*VAEntrypointEncSlice"; then
-        ok "encodeur HEVC 10-bit exposé par le driver"
+        ok "HEVC 10-bit encoder exposed by the driver"
     else
-        ko "pas d'encodeur HEVC Main10 dans vainfo (intel-media-va-driver-non-free ?)"
+        ko "no HEVC Main10 encoder in vainfo (intel-media-va-driver-non-free?)"
     fi
     if echo "$OUT" | grep -q "VAProfileAV1.*Enc\|VAProfileAV1.*VAEntrypointEncSlice"; then
-        ok "encodeur AV1 exposé par le driver"
+        ok "AV1 encoder exposed by the driver"
     else
-        ko "pas d'encodeur AV1 dans vainfo (Arc requis + driver non-free)"
+        ko "no AV1 encoder in vainfo (requires Arc or newer + non-free driver)"
     fi
 else
-    ko "vainfo introuvable (apt install vainfo)"
+    ko "vainfo not found (apt install vainfo)"
 fi
 
 echo "== FFmpeg =="
 FFMPEG="/usr/lib/jellyfin-ffmpeg/ffmpeg"
 [[ -x "$FFMPEG" ]] || FFMPEG=$(command -v ffmpeg || true)
 if [[ -n "$FFMPEG" && -x "$FFMPEG" ]]; then
-    ok "binaire : $FFMPEG ($($FFMPEG -version 2>/dev/null | head -1 | awk '{print $3}'))"
+    ok "binary: $FFMPEG ($($FFMPEG -version 2>/dev/null | head -1 | awk '{print $3}'))"
     for enc in hevc_qsv av1_qsv hevc_vaapi av1_vaapi; do
         if "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -q " $enc "; then
-            ok "encodeur $enc compilé"
+            ok "encoder $enc compiled in"
         else
-            ko "encodeur $enc absent du binaire"
+            ko "encoder $enc missing from the binary"
         fi
     done
     if "$FFMPEG" -hide_banner -h filter=libplacebo 2>/dev/null | grep -q apply_dolbyvision; then
-        ok "libplacebo avec apply_dolbyvision (DV P5 possible)"
+        ok "libplacebo with apply_dolbyvision (DV profile 5 supported)"
     else
-        ko "libplacebo sans apply_dolbyvision : les DV P5 seront skipped_policy"
+        ko "libplacebo without apply_dolbyvision: DV profile 5 files will be skipped_policy"
     fi
-    echo "== Encodage de mire 5 s (test réel) =="
+    echo "== 5 s test pattern encode (real) =="
     for enc in hevc_qsv av1_qsv; do
         if "$FFMPEG" -hide_banner -nostdin -v error \
             -init_hw_device qsv=hw:/dev/dri/renderD128 \
             -f lavfi -i testsrc2=duration=5:size=1920x1080:rate=25 \
             -pix_fmt nv12 -c:v "$enc" -b:v 3000k -f null - 2>/dev/null; then
-            ok "mire 5 s encodée en $enc"
+            ok "5 s test pattern encoded with $enc"
         else
-            ko "échec d'encodage $enc (droits sur /dev/dri ? group_add ?)"
+            ko "$enc encode failed (permissions on /dev/dri? group_add?)"
         fi
     done
 else
-    ko "ffmpeg introuvable"
+    ko "ffmpeg not found"
 fi
 
 echo "== dovi_tool / mkvpropedit =="
-command -v dovi_tool >/dev/null && ok "dovi_tool $(dovi_tool --version 2>/dev/null | awk '{print $2}')" || info "dovi_tool absent (hôte : normal, requis dans le conteneur)"
-command -v mkvpropedit >/dev/null && ok "mkvpropedit présent" || info "mkvpropedit absent (hôte : normal, requis dans le conteneur)"
+command -v dovi_tool >/dev/null && ok "dovi_tool $(dovi_tool --version 2>/dev/null | awk '{print $2}')" || info "dovi_tool missing (normal on the host, required in the container)"
+command -v mkvpropedit >/dev/null && ok "mkvpropedit present" || info "mkvpropedit missing (normal on the host, required in the container)"
 
 echo
 if [[ $FAIL -eq 0 ]]; then
-    echo "Diagnostic : tout est bon. ✅"
+    echo "Diagnostic: all good. ✅"
 else
-    echo "Diagnostic : au moins un point bloquant. ❌"
+    echo "Diagnostic: at least one blocking issue. ❌"
 fi
 exit $FAIL

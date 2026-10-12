@@ -11,10 +11,10 @@ from transcoder.seed_data import (
     BUCKETS,
     LIBRARY_NAMES,
     SEED_BITRATES,
-    SEED_LIBRARIES,
     default_bufsize_kbps,
     default_max_kbps,
     iter_seed_rules,
+    seed_libraries,
 )
 
 
@@ -39,47 +39,47 @@ def test_hevc_exact_values() -> None:
     """Valeurs réelles Tdarr — ne JAMAIS modifier sans décision explicite."""
     h = SEED_BITRATES[Codec.HEVC]
     # (sdr, hdr) — les 4K HDR en valeurs exactes du cahier des charges
-    assert h["Films"][ResolutionBucket.P2160] == (12000, 15000)
-    assert h["Séries"][ResolutionBucket.P2160] == (8000, 12000)
-    assert h["Animés"][ResolutionBucket.P2160] == (8000, 10000)
-    assert h["Films"][ResolutionBucket.P1440] == (8000, 10000)
-    assert h["Séries"][ResolutionBucket.P1440] == (6000, 7500)
-    assert h["Animés"][ResolutionBucket.P1440] == (5000, 6250)
-    assert h["Films"][ResolutionBucket.P1080] == (6000, 7500)
-    assert h["Séries"][ResolutionBucket.P1080] == (4000, 5000)
-    assert h["Animés"][ResolutionBucket.P1080] == (4000, 5000)
-    assert h["Films"][ResolutionBucket.P720] == (3000, 3750)
-    assert h["Séries"][ResolutionBucket.P720] == (2000, 2500)
-    assert h["Animés"][ResolutionBucket.P720] == (2000, 2500)
-    assert h["Films"][ResolutionBucket.P576] == (1400, 1750)
-    assert h["Séries"][ResolutionBucket.P576] == (1100, 1375)
-    assert h["Animés"][ResolutionBucket.P576] == (900, 1125)
-    assert h["Films"][ResolutionBucket.P480] == (1000, 1250)
-    assert h["Séries"][ResolutionBucket.P480] == (800, 1000)
-    assert h["Animés"][ResolutionBucket.P480] == (600, 750)
+    assert h["Movies"][ResolutionBucket.P2160] == (12000, 15000)
+    assert h["TV Shows"][ResolutionBucket.P2160] == (8000, 12000)
+    assert h["Anime"][ResolutionBucket.P2160] == (8000, 10000)
+    assert h["Movies"][ResolutionBucket.P1440] == (8000, 10000)
+    assert h["TV Shows"][ResolutionBucket.P1440] == (6000, 7500)
+    assert h["Anime"][ResolutionBucket.P1440] == (5000, 6250)
+    assert h["Movies"][ResolutionBucket.P1080] == (6000, 7500)
+    assert h["TV Shows"][ResolutionBucket.P1080] == (4000, 5000)
+    assert h["Anime"][ResolutionBucket.P1080] == (4000, 5000)
+    assert h["Movies"][ResolutionBucket.P720] == (3000, 3750)
+    assert h["TV Shows"][ResolutionBucket.P720] == (2000, 2500)
+    assert h["Anime"][ResolutionBucket.P720] == (2000, 2500)
+    assert h["Movies"][ResolutionBucket.P576] == (1400, 1750)
+    assert h["TV Shows"][ResolutionBucket.P576] == (1100, 1375)
+    assert h["Anime"][ResolutionBucket.P576] == (900, 1125)
+    assert h["Movies"][ResolutionBucket.P480] == (1000, 1250)
+    assert h["TV Shows"][ResolutionBucket.P480] == (800, 1000)
+    assert h["Anime"][ResolutionBucket.P480] == (600, 750)
 
 
 def test_av1_exact_values() -> None:
     """Table AV1 dérivée (HEVC × 0,75), figée au seed — aucun facteur runtime."""
     a = SEED_BITRATES[Codec.AV1]
-    assert a["Films"][ResolutionBucket.P2160] == (9000, 11000)
-    assert a["Séries"][ResolutionBucket.P2160] == (6000, 9000)
-    assert a["Animés"][ResolutionBucket.P2160] == (6000, 7500)
-    assert a["Films"][ResolutionBucket.P1440] == (6000, 7500)
-    assert a["Séries"][ResolutionBucket.P1440] == (4500, 5600)
-    assert a["Animés"][ResolutionBucket.P1440] == (3750, 4700)
-    assert a["Films"][ResolutionBucket.P1080] == (4500, 5600)
-    assert a["Séries"][ResolutionBucket.P1080] == (3000, 3750)
-    assert a["Animés"][ResolutionBucket.P1080] == (3000, 3750)
-    assert a["Films"][ResolutionBucket.P720] == (2250, 2800)
-    assert a["Séries"][ResolutionBucket.P720] == (1500, 1900)
-    assert a["Animés"][ResolutionBucket.P720] == (1500, 1900)
-    assert a["Films"][ResolutionBucket.P576] == (1050, 1300)
-    assert a["Séries"][ResolutionBucket.P576] == (850, 1050)
-    assert a["Animés"][ResolutionBucket.P576] == (700, 850)
-    assert a["Films"][ResolutionBucket.P480] == (750, 950)
-    assert a["Séries"][ResolutionBucket.P480] == (600, 750)
-    assert a["Animés"][ResolutionBucket.P480] == (450, 550)
+    assert a["Movies"][ResolutionBucket.P2160] == (9000, 11000)
+    assert a["TV Shows"][ResolutionBucket.P2160] == (6000, 9000)
+    assert a["Anime"][ResolutionBucket.P2160] == (6000, 7500)
+    assert a["Movies"][ResolutionBucket.P1440] == (6000, 7500)
+    assert a["TV Shows"][ResolutionBucket.P1440] == (4500, 5600)
+    assert a["Anime"][ResolutionBucket.P1440] == (3750, 4700)
+    assert a["Movies"][ResolutionBucket.P1080] == (4500, 5600)
+    assert a["TV Shows"][ResolutionBucket.P1080] == (3000, 3750)
+    assert a["Anime"][ResolutionBucket.P1080] == (3000, 3750)
+    assert a["Movies"][ResolutionBucket.P720] == (2250, 2800)
+    assert a["TV Shows"][ResolutionBucket.P720] == (1500, 1900)
+    assert a["Anime"][ResolutionBucket.P720] == (1500, 1900)
+    assert a["Movies"][ResolutionBucket.P576] == (1050, 1300)
+    assert a["TV Shows"][ResolutionBucket.P576] == (850, 1050)
+    assert a["Anime"][ResolutionBucket.P576] == (700, 850)
+    assert a["Movies"][ResolutionBucket.P480] == (750, 950)
+    assert a["TV Shows"][ResolutionBucket.P480] == (600, 750)
+    assert a["Anime"][ResolutionBucket.P480] == (450, 550)
 
 
 def test_max_and_bufsize_derivation() -> None:
@@ -91,8 +91,10 @@ def test_max_and_bufsize_derivation() -> None:
 
 
 def test_seed_libraries_paths() -> None:
-    assert SEED_LIBRARIES == (
-        ("Films", "/srv/storage/Films"),
-        ("Séries", "/srv/storage/Séries"),
-        ("Animés", "/srv/storage/Animés"),
+    expected = (
+        ("Movies", "/mnt/media/Movies"),
+        ("TV Shows", "/mnt/media/TV Shows"),
+        ("Anime", "/mnt/media/Anime"),
     )
+    assert seed_libraries("/mnt/media") == expected
+    assert seed_libraries("/mnt/media/") == expected

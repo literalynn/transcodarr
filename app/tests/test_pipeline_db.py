@@ -160,7 +160,7 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
         await session.flush()
         lib_id = lib.id
         gpu_id = gpu_row.id
-        for bucket, (sdr, _hdr) in SEED_BITRATES[Codec.HEVC]["Films"].items():
+        for bucket, (sdr, _hdr) in SEED_BITRATES[Codec.HEVC]["Movies"].items():
             for is_hdr, target in ((False, 300), (True, sdr)):
                 session.add(
                     BitrateRule(

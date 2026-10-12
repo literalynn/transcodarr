@@ -73,6 +73,7 @@ const EN: Record<string, string> = {
   "Gain": "Gain",
   // Historique
   "Toutes les bibliothèques": "All libraries",
+  "Bibliothèque": "Library",
   "Tous les états": "All states",
   "Rechercher un fichier…": "Search a file…",
   "Durée": "Duration",
@@ -226,6 +227,7 @@ const EN: Record<string, string> = {
   // Badges d'état
   "en attente de scan": "pending scan",
   "en file": "queued",
+  "en cours": "processing",
   "traité": "done",
   "échec": "failed",
   "gain insuffisant": "no gain",
