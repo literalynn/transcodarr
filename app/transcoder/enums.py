@@ -24,6 +24,34 @@ class Container(str, enum.Enum):
     MP4 = "mp4"
 
 
+class MediaType(str, enum.Enum):
+    """Type de bibliothèque : vidéo (GPU) ou musique (CPU)."""
+
+    PG_NAME = enum.nonmember("media_type_t")
+
+    VIDEO = "video"
+    MUSIC = "music"
+
+
+class AudioCodec(str, enum.Enum):
+    PG_NAME = enum.nonmember("audio_codec_t")
+
+    OPUS = "opus"
+    AAC = "aac"
+    MP3 = "mp3"
+
+
+class AudioContainer(str, enum.Enum):
+    """Conteneur de sortie d'une bibliothèque musique (= extension du fichier)."""
+
+    PG_NAME = enum.nonmember("audio_container_t")
+
+    OPUS = "opus"
+    OGG = "ogg"
+    M4A = "m4a"
+    MP3 = "mp3"
+
+
 class HdrPolicy(str, enum.Enum):
     PG_NAME = enum.nonmember("hdr_policy_t")
 

@@ -5,7 +5,9 @@
 - ordonnancement : manual_rank (drag §7.2), puis priority DESC, puis gain
   potentiel estimé, puis mtime DESC — le filtre de date est appliqué au scan ;
 - pause globale (app_settings.queue_paused) et par bibliothèque (paused) ;
-- reprise après crash : running/validating/replacing → queued + purge tmp.
+- reprise après crash : running/validating/replacing → queued + purge tmp ;
+- bibliothèques musique : pool de workers CPU séparé (réglage audio_workers,
+  à chaud), qui ne prend jamais un slot GPU ni une place de max_concurrent_jobs.
 
 Pipeline d'un job (§5.3→§5.6) : pré-vol (source lisible et stable, sonde,
 gain atteignable, test de décodage) → plan DV → règle → plan de pistes →
@@ -42,6 +44,17 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder import TOOL_ID
+from transcoder.core.audio import (
+    COVER_MIME,
+    AudioTarget,
+    build_audio_cmd,
+    cover_stream,
+    extract_cover,
+    ffmetadata,
+    picture_block,
+    sample_rate,
+)
+from transcoder.core.audio import skip_reason as audio_skip_reason
 from transcoder.core.capabilities import Capabilities, GpuCapability, mkvmerge_path_for
 from transcoder.core.cmd_builder import BuildError, BuildParams, build_ffmpeg_cmd
 from transcoder.core.dovi import (
@@ -108,9 +121,15 @@ from transcoder.core.strategy import (
     next_strategy,
     parse_strategy,
 )
-from transcoder.core.validate import ValidationOutcome, ValidationReport, validate_output
+from transcoder.core.validate import (
+    ValidationOutcome,
+    ValidationReport,
+    validate_audio_output,
+    validate_output,
+)
 from transcoder.db import session_scope
 from transcoder.enums import (
+    AudioContainer,
     Codec,
     Container,
     DvPolicy,
@@ -119,6 +138,7 @@ from transcoder.enums import (
     HdrPolicy,
     JobState,
     MediaStatus,
+    MediaType,
     ResolutionBucket,
 )
 from transcoder.events import event_bus
@@ -128,6 +148,8 @@ from transcoder.runtime_config import RuntimeConfig, load_runtime_config
 logger = logging.getLogger(__name__)
 
 _IDLE_POLL_S = 5.0
+# Workers musique lancés au démarrage ; le réglage audio_workers en active 0 à 4, à chaud
+_AUDIO_SLOTS = 4
 # Garde-fou absolu : au-delà, un fichier n'est plus retenté automatiquement
 MAX_ATTEMPTS_PER_SERIES = 6
 
@@ -175,6 +197,21 @@ class _Prepared:
     # intermédiaire, mkvmerge produit tmp_path
     intermediate_path: str | None = None
     mkvmerge_cmd: list[str] | None = None
+
+
+@dataclass(slots=True)
+class _AudioPrepared:
+    """Préparation d'un fichier musical (cible unique de la bibliothèque)."""
+
+    probe: MediaProbe
+    target: AudioTarget
+    min_gain_percent: float
+    cmd: list[str]
+    tmp_path: str
+    dry_run: bool
+    log_path: str
+    # Pochette Ogg (METADATA_BLOCK_PICTURE) : fichier ffmetadata à supprimer
+    metadata_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +295,7 @@ class QueueManager:
     def __init__(self, capabilities: Capabilities) -> None:
         self.capabilities = capabilities
         self._workers: list[asyncio.Task[None]] = []
+        self._audio_workers: list[asyncio.Task[None]] = []
         self._cancel_events: dict[int, asyncio.Event] = {}
         self._active_jobs: dict[int, dict[str, Any]] = {}
         self._stopping = asyncio.Event()
@@ -266,7 +304,8 @@ class QueueManager:
     # Cycle de vie
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        """Démarre un worker par slot (Σ worker_count des GPU activés)."""
+        """Démarre un worker par slot (Σ worker_count des GPU activés) et le
+        pool CPU des bibliothèques musique."""
         await self.stop()
         self._stopping.clear()
         for gpu_cap in self.capabilities.gpus:
@@ -280,16 +319,22 @@ class QueueManager:
                         name=f"worker-{gpu_cap.drm_node}-{slot}",
                     )
                 )
+        self._audio_workers = [
+            asyncio.create_task(self._audio_worker_loop(slot), name=f"audio-{slot}")
+            for slot in range(_AUDIO_SLOTS)
+        ]
         logger.info("Queue démarrée : %d worker(s)", len(self._workers))
 
     async def stop(self) -> None:
         self._stopping.set()
-        for t in self._workers:
+        tasks = self._workers + self._audio_workers
+        for t in tasks:
             t.cancel()
-        for t in self._workers:
+        for t in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
         self._workers = []
+        self._audio_workers = []
 
     async def reload_workers(self) -> None:
         """À appeler quand la config GPU change (workers/enable)."""
@@ -338,7 +383,10 @@ class QueueManager:
             try:
                 async with session_scope() as session:
                     config = await load_runtime_config(session)
-                if config.queue_paused or len(self._active_jobs) >= config.max_concurrent_jobs:
+                video_jobs = sum(
+                    1 for j in self._active_jobs.values() if j["media_type"] == MediaType.VIDEO.value
+                )
+                if config.queue_paused or video_jobs >= config.max_concurrent_jobs:
                     await asyncio.sleep(_IDLE_POLL_S)
                     continue
                 supported = [c for c in Codec if gpu_cap.supports(c)]
@@ -356,7 +404,29 @@ class QueueManager:
                 logger.exception("Worker %s#%d : erreur inattendue", gpu_cap.drm_node, slot)
                 await asyncio.sleep(_IDLE_POLL_S)
 
-    async def _claim(self, supported_codecs: list[Codec]) -> _ClaimedWork | None:
+    async def _audio_worker_loop(self, slot: int) -> None:
+        """Worker CPU des bibliothèques musique (slot actif si < audio_workers)."""
+        while not self._stopping.is_set():
+            try:
+                async with session_scope() as session:
+                    config = await load_runtime_config(session)
+                if config.queue_paused or slot >= config.audio_workers:
+                    await asyncio.sleep(_IDLE_POLL_S)
+                    continue
+                work = await self._claim([], MediaType.MUSIC)
+                if work is None:
+                    await asyncio.sleep(_IDLE_POLL_S)
+                    continue
+                await self._process_audio(work, slot, config)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Worker audio #%d : erreur inattendue", slot)
+                await asyncio.sleep(_IDLE_POLL_S)
+
+    async def _claim(
+        self, supported_codecs: list[Codec], media_type: MediaType = MediaType.VIDEO
+    ) -> _ClaimedWork | None:
         """Claim atomique du prochain fichier éligible (FOR UPDATE SKIP LOCKED)."""
         async with session_scope() as session:
             stmt = (
@@ -366,7 +436,7 @@ class QueueManager:
                     MediaFile.status == MediaStatus.QUEUED,
                     Library.enabled.is_(True),
                     Library.paused.is_(False),
-                    Library.output_codec.in_(supported_codecs),
+                    Library.media_type == media_type,
                     or_(
                         MediaFile.next_attempt_at.is_(None),
                         MediaFile.next_attempt_at <= _now(),
@@ -381,6 +451,8 @@ class QueueManager:
                 .limit(1)
                 .with_for_update(of=MediaFile, skip_locked=True)
             )
+            if media_type is MediaType.VIDEO:
+                stmt = stmt.where(Library.output_codec.in_(supported_codecs))
             mf = (await session.execute(stmt)).scalars().first()
             if mf is None:
                 return None
@@ -443,6 +515,7 @@ class QueueManager:
             "job_id": job_id,
             "media_id": work.media_id,
             "library_id": work.library_id,
+            "media_type": MediaType.VIDEO.value,
             "path": "",
             "gpu": gpu_cap.name,
             "drm_node": gpu_cap.drm_node,
@@ -692,7 +765,8 @@ class QueueManager:
                 work=work,
                 gpu_cap=gpu_cap,
                 probe=probe,
-                rule=rule,
+                rule_hash=rule.rule_hash,
+                transcoder_tag=build_transcoder_tag(rule),
                 report=report,
                 run_log_tail=result.log_tail,
                 exit_code=result.exit_code,
@@ -826,18 +900,7 @@ class QueueManager:
             caps=self.capabilities.dv_caps,
         )
         if plan.action is TreatmentAction.SKIP:
-            async with session_scope() as session:
-                job_row = await session.get(Job, work.job_id)
-                mf_row = await session.get(MediaFile, work.media_id)
-                if job_row is not None:
-                    job_row.state = JobState.CANCELLED
-                    job_row.error_message = plan.reason
-                    job_row.strategy = Strategy.PREFLIGHT.value
-                    job_row.finished_at = _now()
-                if mf_row is not None:
-                    mf_row.status = MediaStatus.SKIPPED_POLICY
-                    mf_row.last_error = plan.reason
-                    _reset_series(mf_row)
+            await self._finalize_policy_skip(work, plan.reason)
             raise _PrepareAbort()
 
         # --- 4. Règle de bitrate ------------------------------------------------------
@@ -944,31 +1007,14 @@ class QueueManager:
         src_stat = os.stat(src_path)
         src_size = src_stat.st_size
         try:
-            if dry_run:
-                os.makedirs(config.dry_run_out_dir, exist_ok=True)
-                check_free_space(
-                    config.dry_run_out_dir,
-                    needed_bytes=src_size,
-                    min_free_gb=config.min_free_disk_gb,
-                )
-                tmp_path = make_dry_run_path(
-                    src_path,
-                    library_path=lib.path,
-                    out_dir=config.dry_run_out_dir,
-                    container=lib.container,
-                )
-            else:
-                check_free_space(
-                    os.path.dirname(src_path),
-                    needed_bytes=src_size,
-                    min_free_gb=config.min_free_disk_gb,
-                )
-                tmp_path = make_tmp_path(
-                    src_path,
-                    container=lib.container,
-                    tmp_strategy=config.tmp_strategy,
-                    tmp_dir=config.tmp_dir,
-                )
+            tmp_path = _output_path(
+                src_path,
+                library_path=lib.path,
+                container=lib.container,
+                dry_run=dry_run,
+                needed_bytes=src_size,
+                config=config,
+            )
         except DiskSpaceError as exc:
             report.add("disque", "error", str(exc))
             raise await abort(Failure(FailureCategory.DISK_SPACE, str(exc))) from None
@@ -1116,8 +1162,324 @@ class QueueManager:
         )
 
     # ------------------------------------------------------------------
+    # Pipeline d'un fichier musical
+    # ------------------------------------------------------------------
+    async def _process_audio(self, work: _ClaimedWork, slot: int, config: RuntimeConfig) -> None:
+        """Pré-vol → encodage CPU → validation → remplacement, avec les mêmes
+        issues que la vidéo (échecs classés, repli tolérant, sans gain)."""
+        job_id = work.job_id
+        cancel_event = asyncio.Event()
+        self._cancel_events[job_id] = cancel_event
+        prep: _AudioPrepared | None = None
+        self._active_jobs[job_id] = {
+            "job_id": job_id,
+            "media_id": work.media_id,
+            "library_id": work.library_id,
+            "media_type": MediaType.MUSIC.value,
+            "path": "",
+            "gpu": "CPU",
+            "drm_node": "cpu",
+            "slot": slot,
+            "dry_run": False,
+            "started_at": _now().isoformat(),
+            "percent": 0.0,
+            "phase": "pré-vol",
+            "strategy": work.strategy.value,
+            "attempt": work.attempt,
+        }
+        try:
+            try:
+                prep = await self._prepare_audio(work, slot, config)
+            except _PrepareAbort:
+                return
+            probe, target = prep.probe, prep.target
+            self._active_jobs[job_id].update(
+                path=probe.path, dry_run=prep.dry_run, strategy=work.strategy.value, phase="encodage"
+            )
+            logger.info(
+                "Job %d : DÉMARRAGE %s — %s %s kbps → %s %dk (stratégie %s, tentative %d, "
+                "worker audio #%d%s)",
+                job_id,
+                os.path.basename(probe.path),
+                probe.audio_codec or "?",
+                probe.audio_bitrate_kbps or "?",
+                target.codec.value,
+                target.bitrate_kbps,
+                work.strategy.value,
+                work.attempt,
+                slot,
+                ", DRY-RUN" if prep.dry_run else "",
+            )
+            event_bus.publish_queue({"type": "job_started", "job": dict(self._active_jobs[job_id])})
+
+            async def on_progress(u: ProgressUpdate) -> None:
+                info = self._active_jobs.get(job_id)
+                if info is not None:
+                    info.update(percent=u.percent, speed=u.speed, eta_s=u.eta_s)
+                event = {
+                    "type": "progress",
+                    "percent": u.percent,
+                    "fps": None,
+                    "speed": u.speed,
+                    "eta_s": u.eta_s,
+                }
+                event_bus.publish_queue({**event, "job_id": job_id})
+                event_bus.publish_log(job_id, event)
+
+            async def on_log(line: str) -> None:
+                event_bus.publish_log(job_id, {"type": "log", "line": line})
+
+            result = await run_ffmpeg(
+                prep.cmd,
+                duration_s=probe.duration_s,
+                log_path=prep.log_path,
+                on_progress=on_progress,
+                on_log_line=on_log,
+                cancel_event=cancel_event,
+            )
+            if result.cancelled:
+                await self._finalize_cancelled(work, result.log_tail, result.exit_code)
+                return
+
+            await self._set_job_state(job_id, JobState.VALIDATING)
+            event_bus.publish_queue({"type": "job_validating", "job_id": job_id})
+
+            async def on_check(label: str) -> None:
+                self._set_phase(job_id, f"validation {label}")
+
+            report = await validate_audio_output(
+                ffmpeg_path=config.ffmpeg_path,
+                ffprobe_path=config.ffprobe_path,
+                src_probe=probe,
+                src_size_bytes=os.path.getsize(probe.path) if os.path.exists(probe.path) else 0,
+                dst_path=prep.tmp_path,
+                exit_code=result.exit_code,
+                target=target,
+                min_gain_percent=prep.min_gain_percent,
+                on_check=on_check,
+            )
+            self._set_phase(job_id, "finalisation")
+            await self._finalize(
+                work=work,
+                gpu_cap=None,
+                probe=probe,
+                rule_hash=target.rule_hash,
+                transcoder_tag=target.tag,
+                report=report,
+                run_log_tail=result.log_tail,
+                exit_code=result.exit_code,
+                avg_fps=None,
+                avg_speed=result.avg_speed,
+                tmp_path=prep.tmp_path,
+                dry_run=prep.dry_run,
+                config=config,
+                container=target.container,
+            )
+        except Exception as exc:
+            logger.exception("Job %d : erreur inattendue", job_id)
+            await self._record_failure(
+                work,
+                Failure(FailureCategory.INTERNAL, f"erreur interne : {exc}"),
+                config=config,
+                gpu_cap=None,
+            )
+            if prep is not None and os.path.exists(prep.tmp_path):
+                with contextlib.suppress(OSError):
+                    os.unlink(prep.tmp_path)
+        finally:
+            if prep is not None and prep.metadata_path:
+                with contextlib.suppress(OSError):
+                    os.unlink(prep.metadata_path)
+            self._cancel_events.pop(job_id, None)
+            if self._active_jobs.pop(job_id, None) is not None:
+                event_bus.publish_queue({"type": "job_finished", "job_id": job_id})
+
+    async def _prepare_audio(
+        self, work: _ClaimedWork, slot: int, config: RuntimeConfig
+    ) -> _AudioPrepared:
+        """Pré-vol (source, sonde, éligibilité, disque), pochette, commande.
+
+        Pas de prédiction de gain ici : le scan l'a faite, et le contrôle 7
+        tranche pour quelques secondes d'encodage. Lève _PrepareAbort quand
+        l'issue du job a déjà été enregistrée."""
+        report = PreflightReport()
+        strategy = work.strategy
+
+        async def abort(failure: Failure) -> _PrepareAbort:
+            await self._record_failure(
+                work, failure, config=config, gpu_cap=None,
+                diagnostics={"preflight": report.as_dict()},
+            )
+            return _PrepareAbort()
+
+        async with session_scope() as session:
+            mf = await session.get(MediaFile, work.media_id)
+            library = await session.get(Library, work.library_id)
+            if mf is None:
+                raise _PrepareAbort()
+            if library is None:
+                raise await abort(Failure(FailureCategory.INTERNAL, "bibliothèque supprimée"))
+            src_path = mf.path
+            library_path = library.path
+            target = AudioTarget(
+                library.audio_codec, library.audio_container, library.audio_bitrate_kbps
+            )
+            min_gain_percent = float(library.min_gain_percent)
+            dry_run = library.dry_run if library.dry_run is not None else config.dry_run_global
+        info = self._active_jobs.get(work.job_id)
+        if info is not None:
+            info["path"] = src_path
+            event_bus.publish_queue({"type": "job_started", "job": dict(info)})
+
+        self._set_phase(work.job_id, "pré-vol : accès à la source")
+        access, access_detail = await asyncio.to_thread(check_source_access, src_path)
+        report.add("source", "ok" if access == "ok" else "error", access_detail)
+        if access == "busy":
+            raise await abort(Failure(FailureCategory.SOURCE_BUSY, access_detail))
+        if access == "error":
+            raise await abort(Failure(FailureCategory.SOURCE_UNREADABLE, access_detail))
+
+        try:
+            probe = await probe_file(src_path, config.ffprobe_path, frames=False)
+        except ProbeError as exc:
+            report.add("sonde", "error", str(exc)[:300])
+            raise await abort(
+                Failure(FailureCategory.SOURCE_UNREADABLE, f"sonde impossible : {exc}"[:500])
+            ) from None
+        policy = audio_skip_reason(probe)
+        if policy is not None:
+            await self._finalize_policy_skip(work, policy)
+            raise _PrepareAbort()
+        report.add(
+            "sonde",
+            "ok",
+            f"{probe.audio_codec} {probe.audio_bitrate_kbps or '?'} kbps, "
+            f"{(probe.duration_s or 0) / 60:.1f} min, {probe.format_name or '?'}",
+        )
+
+        src_stat = os.stat(src_path)
+        try:
+            tmp_path = _output_path(
+                src_path,
+                library_path=library_path,
+                container=target.container,
+                dry_run=dry_run,
+                needed_bytes=src_stat.st_size,
+                config=config,
+            )
+        except DiskSpaceError as exc:
+            report.add("disque", "error", str(exc))
+            raise await abort(Failure(FailureCategory.DISK_SPACE, str(exc))) from None
+        report.add("disque", "ok", "espace libre suffisant")
+
+        # Pochette : flux copié en MP3/M4A ; en Ogg, bloc METADATA_BLOCK_PICTURE
+        # (le muxer refuse le flux image, voir core/audio.py)
+        cover = cover_stream(probe.raw)
+        metadata_path: str | None = None
+        if cover is not None and target.container in (AudioContainer.OPUS, AudioContainer.OGG):
+            data = await extract_cover(config.ffmpeg_path, src_path, int(cover["index"]))
+            if data is None:
+                report.add("pochette", "warning", "extraction impossible (contrôle 6 en échec)")
+            else:
+                metadata_path = tmp_path + ".ffmeta"
+                block = picture_block(
+                    data,
+                    mime=COVER_MIME[cover["codec_name"]],
+                    width=int(cover.get("width") or 0),
+                    height=int(cover.get("height") or 0),
+                )
+                await asyncio.to_thread(
+                    _write_text, metadata_path, ffmetadata({"METADATA_BLOCK_PICTURE": block})
+                )
+                report.add("pochette", "ok", "pochette convertie en METADATA_BLOCK_PICTURE")
+        elif cover is not None:
+            report.add("pochette", "ok", f"pochette {cover['codec_name']} copiée")
+
+        cmd = build_audio_cmd(
+            ffmpeg_path=config.ffmpeg_path,
+            src_path=src_path,
+            dst_path=tmp_path,
+            target=target,
+            strategy=strategy,
+            input_format=probe.format_name,
+            cover_index=int(cover["index"]) if cover is not None else None,
+            metadata_path=metadata_path,
+            src_sample_rate=sample_rate(probe.raw),
+        )
+        log_path = os.path.join(config.log_dir, f"job_{work.job_id}.log")
+        diagnostics: dict[str, Any] = {
+            "preflight": report.as_dict(),
+            "strategy": {
+                "used": strategy.value,
+                "requested": strategy.value,
+                "attempt": work.attempt,
+                "container": target.container.value,
+                "input_format": probe.format_name,
+                "media_type": MediaType.MUSIC.value,
+            },
+            "audio_target": {
+                "codec": target.codec.value,
+                "container": target.container.value,
+                "bitrate_kbps": target.bitrate_kbps,
+            },
+        }
+        _write_log_header(log_path, work, strategy, report, None, cmd)
+
+        async with session_scope() as session:
+            job = await session.get(Job, work.job_id)
+            if job is None:
+                raise _PrepareAbort()
+            job.state = JobState.RUNNING
+            job.dry_run = dry_run
+            job.rule_hash = target.rule_hash
+            job.gpu_id = None
+            job.worker_slot = slot
+            job.started_at = _now()
+            job.strategy = strategy.value
+            job.src_path = src_path
+            job.src_size_bytes = src_stat.st_size
+            job.src_codec = probe.audio_codec
+            job.src_bitrate_kbps = probe.audio_bitrate_kbps
+            job.src_hdr_format = probe.hdr_format
+            job.src_duration_s = (
+                decimal.Decimal(f"{probe.duration_s:.3f}") if probe.duration_s else None
+            )
+            job.src_mtime = datetime.datetime.fromtimestamp(
+                src_stat.st_mtime, tz=datetime.timezone.utc
+            )
+            job.dst_path = tmp_path
+            job.ffmpeg_cmd = cmd
+            job.log_path = log_path
+            job.diagnostics = diagnostics
+        return _AudioPrepared(
+            probe=probe,
+            target=target,
+            min_gain_percent=min_gain_percent,
+            cmd=cmd,
+            tmp_path=tmp_path,
+            dry_run=dry_run,
+            log_path=log_path,
+            metadata_path=metadata_path,
+        )
+
+    # ------------------------------------------------------------------
     # Finalisations
     # ------------------------------------------------------------------
+    async def _finalize_policy_skip(self, work: _ClaimedWork, reason: str) -> None:
+        """Fichier hors politique (HDR/DV, musique multipiste…) : skipped_policy sans encoder."""
+        async with session_scope() as session:
+            job_row = await session.get(Job, work.job_id)
+            mf_row = await session.get(MediaFile, work.media_id)
+            if job_row is not None:
+                job_row.state = JobState.CANCELLED
+                job_row.error_message = reason
+                job_row.strategy = Strategy.PREFLIGHT.value
+                job_row.finished_at = _now()
+            if mf_row is not None:
+                mf_row.status = MediaStatus.SKIPPED_POLICY
+                mf_row.last_error = reason
+                _reset_series(mf_row)
+
     async def _save_snapshot(self, job_id: int, u: ProgressUpdate) -> None:
         with contextlib.suppress(Exception):
             async with session_scope() as session:
@@ -1340,9 +1702,10 @@ class QueueManager:
         self,
         *,
         work: _ClaimedWork,
-        gpu_cap: GpuCapability,
+        gpu_cap: GpuCapability | None,
         probe: MediaProbe,
-        rule: ResolvedRule,
+        rule_hash: str,
+        transcoder_tag: str,
         report: ValidationReport,
         run_log_tail: str,
         exit_code: int,
@@ -1351,10 +1714,11 @@ class QueueManager:
         tmp_path: str,
         dry_run: bool,
         config: RuntimeConfig,
-        container: Container,
+        container: Container | AudioContainer,
     ) -> None:
         """Applique l'issue de la validation : succès/remplacement, no-gain, échec."""
         dst_probe: MediaProbe | None = report.dst_probe
+        music = isinstance(container, AudioContainer)
         dst_size = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else None
 
         async with session_scope() as session:
@@ -1373,8 +1737,10 @@ class QueueManager:
                     f"{(job.finished_at - job.started_at).total_seconds():.3f}"
                 )
             if dst_probe is not None:
-                job.dst_codec = dst_probe.video_codec
-                job.dst_bitrate_kbps = dst_probe.video_bitrate_kbps
+                job.dst_codec = dst_probe.audio_codec if music else dst_probe.video_codec
+                job.dst_bitrate_kbps = (
+                    dst_probe.audio_bitrate_kbps if music else dst_probe.video_bitrate_kbps
+                )
                 job.dst_resolution = (
                     f"{dst_probe.width}x{dst_probe.height}" if dst_probe.width else None
                 )
@@ -1401,7 +1767,7 @@ class QueueManager:
                 job.state = JobState.SKIPPED_NO_GAIN
                 job.dst_path = None
                 mf.status = MediaStatus.SKIPPED_NO_GAIN
-                mf.applied_rule_hash = rule.rule_hash
+                mf.applied_rule_hash = rule_hash
                 mf.last_error = None
                 _reset_series(mf)
                 event_bus.publish_queue(
@@ -1424,7 +1790,7 @@ class QueueManager:
                 job.dst_path = None
                 self._apply_failure(
                     job, mf, work, failure, config=config, gpu_cap=gpu_cap,
-                    rule_hash=rule.rule_hash,
+                    rule_hash=rule_hash,
                 )
                 return
 
@@ -1444,7 +1810,7 @@ class QueueManager:
                 job.state = JobState.SUCCESS
                 job.dst_path = tmp_path
                 mf.status = MediaStatus.DONE
-                mf.applied_rule_hash = rule.rule_hash
+                mf.applied_rule_hash = rule_hash
                 mf.processed_tool_version = TOOL_ID
                 mf.last_error = None
                 _reset_series(mf)
@@ -1514,7 +1880,7 @@ class QueueManager:
                 self._apply_failure(
                     job, mf, work,
                     Failure(category, f"remplacement impossible : {exc}"),
-                    config=config, gpu_cap=gpu_cap, rule_hash=rule.rule_hash,
+                    config=config, gpu_cap=gpu_cap, rule_hash=rule_hash,
                 )
                 return
 
@@ -1540,9 +1906,9 @@ class QueueManager:
                 )
             mf.path = replace_result.final_path
             mf.status = MediaStatus.DONE
-            mf.applied_rule_hash = rule.rule_hash
+            mf.applied_rule_hash = rule_hash
             mf.processed_tool_version = TOOL_ID
-            mf.transcoder_tag = build_transcoder_tag(rule)
+            mf.transcoder_tag = transcoder_tag
             mf.last_error = None
             _reset_series(mf)
             mf.size_bytes = dst_size
@@ -1555,6 +1921,8 @@ class QueueManager:
                 mf.dv_profile = None
                 mf.dv_bl_compat_id = None
                 mf.dv_has_el = None
+                mf.audio_codec = dst_probe.audio_codec
+                mf.audio_bitrate_kbps = dst_probe.audio_bitrate_kbps
                 mf.audio_streams = dst_probe.audio_streams
                 mf.subtitle_streams = dst_probe.subtitle_streams
             event_bus.publish_queue(
@@ -1602,6 +1970,10 @@ def _command_change_predicate(
     diagnostics = (job.diagnostics or {}) if job is not None else {}
     streams = streams_from_diagnostics(diagnostics.get("stream_plan"))
     strategy_info = diagnostics.get("strategy") or {}
+    if strategy_info.get("media_type") == MediaType.MUSIC.value:
+        # Musique : seule l'entrée tolérante change la commande
+        tolerant_tried = any(parse_strategy(t).tolerant_input for t in tried)
+        return lambda candidate: candidate is Strategy.TOLERANT and not tolerant_tried
     container_value = strategy_info.get("container")
     if not streams or container_value is None:
         return None
@@ -1631,6 +2003,39 @@ def _command_change_predicate(
     return changes
 
 
+def _output_path(
+    src_path: str,
+    *,
+    library_path: str,
+    container: Container | AudioContainer,
+    dry_run: bool,
+    needed_bytes: int,
+    config: RuntimeConfig,
+) -> str:
+    """Sortie de l'encodage après contrôle de l'espace libre (§5.6) : miroir
+    sous dry_run_out_dir en dry-run (§9.4), temporaire à côté de la source
+    sinon. Lève DiskSpaceError."""
+    if dry_run:
+        os.makedirs(config.dry_run_out_dir, exist_ok=True)
+        check_free_space(
+            config.dry_run_out_dir, needed_bytes=needed_bytes, min_free_gb=config.min_free_disk_gb
+        )
+        return make_dry_run_path(
+            src_path, library_path=library_path, out_dir=config.dry_run_out_dir, container=container
+        )
+    check_free_space(
+        os.path.dirname(src_path), needed_bytes=needed_bytes, min_free_gb=config.min_free_disk_gb
+    )
+    return make_tmp_path(
+        src_path, container=container, tmp_strategy=config.tmp_strategy, tmp_dir=config.tmp_dir
+    )
+
+
+def _write_text(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
 def _target_codec(job: Job) -> Codec | None:
     """Codec cible de la tentative, lu dans la commande enregistrée."""
     for arg in job.ffmpeg_cmd or []:
@@ -1646,7 +2051,7 @@ def _write_log_header(
     work: _ClaimedWork,
     strategy: Strategy,
     report: PreflightReport,
-    stream_plan: StreamPlan,
+    stream_plan: StreamPlan | None,
     cmd: list[str],
 ) -> None:
     """En-tête lisible en tête du log du job : contexte de la tentative."""
@@ -1656,7 +2061,7 @@ def _write_log_header(
             fh.write(f"# Transcodarr — tentative {work.attempt}, stratégie « {strategy.value} »\n")
             for check in report.checks:
                 fh.write(f"# pré-vol [{check.status}] {check.name} : {check.detail}\n")
-            for d in stream_plan.decisions:
+            for d in stream_plan.decisions if stream_plan is not None else ():
                 if d.action is not StreamAction.COPY:
                     extra = f" → {d.target_codec}" if d.target_codec else ""
                     fh.write(

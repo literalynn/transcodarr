@@ -541,3 +541,33 @@ spécial) dont l'audio saute de 269 s — mkvmerge n'y voit que 3 pistes sur 9.
 - **Export CSV** de l'historique : colonnes en anglais.
 - Titres de la médiathèque retirés des notes et des tests. Licence GPL-3.0,
   SPEC.md (prompt d'origine) retiré.
+
+## 2026-10-26 — Bibliothèques musique (0.11.0)
+
+- **Type de bibliothèque** (`media_type` : vidéo ou musique), choisi à la
+  création et figé ensuite : fichiers, règles et statistiques en dépendent.
+- **Une cible par bibliothèque musique** : codec (Opus, AAC, MP3), conteneur
+  (`.opus`/`.ogg`, `.m4a`, `.mp3`) et débit (32 à 510/512/320 kbps). Le hash
+  anti-boucle couvre les trois : changer la cible remet en file les fichiers
+  déjà réencodés (rappelé sous le formulaire).
+- **Workers CPU dédiés** (`audio_workers`, 0 à 4, 2 par défaut, à chaud) :
+  libopus/aac/libmp3lame n'ont pas d'équivalent GPU utile et une piste
+  s'encode en quelques secondes. Ils ne comptent pas dans
+  `max_concurrent_jobs`.
+- **Pochette en Ogg** : le muxer Ogg de FFmpeg 7.1 refuse le flux image ; elle
+  passe en commentaire METADATA_BLOCK_PICTURE, via un fichier ffmetadata (une
+  ligne de commande est limitée à 128 Kio). Seule la première image est gardée.
+- **Marqueur en M4A** : FFmpeg n'y écrit que les atomes iTunes standards, et
+  `use_metadata_tags` les remplacerait tous par des clés mdta que la plupart
+  des lecteurs ignorent. Le marqueur prend donc la place de l'outil
+  d'encodage (©too). Prix assumé : les tags non standards (MusicBrainz…) sont
+  perdus en M4A, ce que l'UI signale.
+- **Écartés plutôt que mutilés** : plusieurs pistes audio, ou une vraie piste
+  vidéo (une pochette n'en est pas une). Débit source déjà sous la cible :
+  gain prévu insuffisant, aucun encodage.
+- **7 contrôles** (pas de HDR ni de DV) ; un seul repli : le décodage tolérant.
+- **Collision d'extension** : si `piste.opus` existe déjà à côté de
+  `piste.flac`, le remplacement est refusé et l'original reste intact. La
+  garde vaut aussi pour la vidéo (`film.avi` → `film.mkv`).
+- **Dashboard** : filtre Tout / Vidéo / Musique sur toutes les statistiques ;
+  « tout » additionne temps GPU et CPU (« h d'encodage »).

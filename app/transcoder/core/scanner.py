@@ -25,6 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder import TOOL_ID
+from transcoder.core.audio import AudioTarget, gain_hopeless
+from transcoder.core.audio import skip_reason as audio_skip_reason
 from transcoder.core.buckets import bucket_for_height
 from transcoder.core.dovi import DvCapabilities, TreatmentAction, TreatmentPlan, plan_treatment
 from transcoder.core.failures import FailureCategory
@@ -32,7 +34,7 @@ from transcoder.core.preflight import predict_gain
 from transcoder.core.probe import MediaProbe, ProbeError, probe_file
 from transcoder.core.replace import TMP_DIR_NAME
 from transcoder.core.rules import NoRuleError, parse_transcoder_tag, resolve_rule
-from transcoder.enums import HdrFormat, MediaStatus
+from transcoder.enums import HdrFormat, MediaStatus, MediaType
 from transcoder.models import BitrateRule, Library, MediaFile
 from transcoder.runtime_config import RuntimeConfig
 
@@ -229,6 +231,8 @@ def probe_from_row(mf: MediaFile) -> MediaProbe:
         dv_has_rpu=None,
         mastering_display=None,
         content_light=None,
+        audio_codec=mf.audio_codec,
+        audio_bitrate_kbps=mf.audio_bitrate_kbps,
         audio_streams=list(mf.audio_streams or []),
         subtitle_streams=list(mf.subtitle_streams or []),
         transcoder_tag=mf.transcoder_tag,
@@ -353,6 +357,8 @@ async def scan_library(
     by_path: dict[str, MediaFile] = {m.path: m for m in existing_rows}
     seen: set[str] = set()
     jf_dates = jellyfin_dates or {}
+    music = library.media_type is MediaType.MUSIC
+    target = AudioTarget(library.audio_codec, library.audio_container, library.audio_bitrate_kbps)
 
     all_paths = _walk_media_files(library.path)
     total = len(all_paths)
@@ -407,7 +413,7 @@ async def scan_library(
             and mf.size_bytes == st.st_size
             and mf.mtime is not None
             and abs(mf.mtime.timestamp() - st.st_mtime) < 1.0
-            and mf.video_codec is not None
+            and (mf.audio_codec if music else mf.video_codec) is not None
         )
 
         # --- Sonde (incrémentale §5.1) -------------------------------------
@@ -421,7 +427,7 @@ async def scan_library(
                     # Constaté en production : 15 épisodes de 0 octet importés
                     # tels quels ; « EBML header parsing failed » n'aidait personne
                     raise ProbeError(EMPTY_FILE_ERROR)
-                probe = await probe_file(path, config.ffprobe_path)
+                probe = await probe_file(path, config.ffprobe_path, frames=not music)
             except ProbeError as exc:
                 result.failed_probe += 1
                 if mf is None:
@@ -449,43 +455,64 @@ async def scan_library(
         assert mf is not None
 
         # --- Plan de traitement + règle -------------------------------------
-        plan = plan_treatment(
-            probe,
-            hdr_policy=library.hdr_policy,
-            dv_policy=library.dv_policy,
-            caps=dv_caps,
-        )
         rule_hash: str | None = None
         target_kbps: int | None = None
         hopeless_reason: str | None = None
-        if probe.resolution_bucket is not None:
-            try:
-                resolved = resolve_rule(
-                    rules,
-                    codec=library.output_codec,
-                    bucket=probe.resolution_bucket,
-                    is_hdr=plan.effective_is_hdr,
-                    container=library.container,
-                    hdr_policy=library.hdr_policy,
-                    dv_policy=library.dv_policy,
-                )
-                rule_hash = resolved.rule_hash
-                target_kbps = resolved.target_kbps
-            except NoRuleError:
-                rule_hash = None
-        if target_kbps is not None and config.preflight_gain_check:
-            prediction = predict_gain(
-                src_video_kbps=probe.video_bitrate_kbps,
-                size_bytes=st.st_size,
-                duration_s=probe.duration_s,
-                target_kbps=target_kbps,
-                min_gain_percent=float(library.min_gain_percent),
-                # Bitrate seulement estimable : la durée conteneur peut être
-                # fausse, le pré-vol du worker mesure la durée réelle
-                allow_estimated=False,
+        if music:
+            # Cible unique de la bibliothèque : ni plan HDR ni échelle de bitrates
+            # (seul SKIP compte dans la décision, l'action n'est qu'indicative)
+            policy = audio_skip_reason(probe)
+            plan = TreatmentPlan(
+                action=TreatmentAction.SKIP if policy else TreatmentAction.SDR_PASSTHROUGH,
+                effective_is_hdr=False,
+                output_hdr_format=HdrFormat.SDR,
+                reason=policy or "musique : réencodage vers la cible de la bibliothèque",
             )
-            if prediction.hopeless:
-                hopeless_reason = prediction.reason
+            rule_hash = target.rule_hash
+            target_kbps = target.bitrate_kbps
+            src_kbps = probe.audio_bitrate_kbps
+            if config.preflight_gain_check:
+                hopeless_reason = gain_hopeless(
+                    src_kbps, target, float(library.min_gain_percent)
+                )
+        else:
+            plan = plan_treatment(
+                probe,
+                hdr_policy=library.hdr_policy,
+                dv_policy=library.dv_policy,
+                caps=dv_caps,
+            )
+            if probe.resolution_bucket is not None:
+                try:
+                    resolved = resolve_rule(
+                        rules,
+                        codec=library.output_codec,
+                        bucket=probe.resolution_bucket,
+                        is_hdr=plan.effective_is_hdr,
+                        container=library.container,
+                        hdr_policy=library.hdr_policy,
+                        dv_policy=library.dv_policy,
+                    )
+                    rule_hash = resolved.rule_hash
+                    target_kbps = resolved.target_kbps
+                except NoRuleError:
+                    rule_hash = None
+            if target_kbps is not None and config.preflight_gain_check:
+                prediction = predict_gain(
+                    src_video_kbps=probe.video_bitrate_kbps,
+                    size_bytes=st.st_size,
+                    duration_s=probe.duration_s,
+                    target_kbps=target_kbps,
+                    min_gain_percent=float(library.min_gain_percent),
+                    # Bitrate seulement estimable : la durée conteneur peut être
+                    # fausse, le pré-vol du worker mesure la durée réelle
+                    allow_estimated=False,
+                )
+                if prediction.hopeless:
+                    hopeless_reason = prediction.reason
+            src_kbps = effective_video_bitrate_kbps(
+                probe.video_bitrate_kbps, st.st_size, probe.duration_s
+            )
 
         decision = decide_status(
             FileFacts(
@@ -508,11 +535,7 @@ async def scan_library(
 
         if target_kbps is not None:
             mf.estimated_gain_bytes = estimate_gain_bytes(
-                effective_video_bitrate_kbps(
-                    probe.video_bitrate_kbps, st.st_size, probe.duration_s
-                ),
-                target_kbps,
-                probe.duration_s,
+                src_kbps, target_kbps, probe.duration_s
             )
 
     # --- Fichiers disparus ----------------------------------------------------
@@ -571,6 +594,8 @@ def _apply_probe(
     mf.dv_profile = probe.dv_profile
     mf.dv_bl_compat_id = probe.dv_bl_compat_id
     mf.dv_has_el = probe.dv_has_el
+    mf.audio_codec = probe.audio_codec
+    mf.audio_bitrate_kbps = probe.audio_bitrate_kbps
     mf.audio_streams = probe.audio_streams
     mf.subtitle_streams = probe.subtitle_streams
     mf.probe = probe.raw or None

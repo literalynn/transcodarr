@@ -12,14 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder.api import schemas
 from transcoder.api.deps import get_capabilities, get_scan_scheduler
+from transcoder.core.audio import MUSIC_EXTENSIONS, target_error
 from transcoder.core.capabilities import Capabilities
 from transcoder.db import get_db
-from transcoder.enums import Codec, MediaStatus
+from transcoder.enums import Codec, MediaStatus, MediaType
 from transcoder.models import BitrateRule, Library, MediaFile
 from transcoder.scan_service import ScanScheduler, run_scan
 from transcoder.seed_data import SEED_BITRATES, default_bufsize_kbps, default_max_kbps
 
 router = APIRouter(prefix="/libraries", tags=["libraries"])
+
+VIDEO_EXTENSIONS = ("mkv", "mp4", "m2ts", "ts", "avi", "mov", "wmv")
 
 
 async def _get_library(session: AsyncSession, library_id: int) -> Library:
@@ -49,6 +52,12 @@ async def create_library(
     )
     if dup:
         raise HTTPException(409, "nom ou chemin déjà utilisé")
+    audio_error = target_error(
+        payload.audio_codec, payload.audio_container, payload.audio_bitrate_kbps
+    )
+    if audio_error is not None:
+        raise HTTPException(422, audio_error)
+    music = payload.media_type is MediaType.MUSIC
     lib = Library(
         name=payload.name,
         path=payload.path.rstrip("/"),
@@ -57,9 +66,14 @@ async def create_library(
         container=payload.container,
         hdr_policy=payload.hdr_policy,
         dv_policy=payload.dv_policy,
+        media_type=payload.media_type,
+        audio_codec=payload.audio_codec,
+        audio_container=payload.audio_container,
+        audio_bitrate_kbps=payload.audio_bitrate_kbps,
         date_filter_after=payload.date_filter_after,
         priority=payload.priority,
-        include_extensions=payload.include_extensions,
+        include_extensions=payload.include_extensions
+        or list(MUSIC_EXTENSIONS if music else VIDEO_EXTENSIONS),
         exclude_globs=payload.exclude_globs,
         min_gain_percent=decimal.Decimal(f"{payload.min_gain_percent:.2f}"),
         scan_cron=payload.scan_cron,
@@ -69,7 +83,8 @@ async def create_library(
     await session.flush()
     # Jeu complet de règles par défaut (échelle « Movies ») : la
     # bibliothèque est fonctionnelle immédiatement, l'UI permet d'éditer.
-    for codec in (Codec.HEVC, Codec.AV1):
+    # Musique : cible unique, pas d'échelle.
+    for codec in () if music else (Codec.HEVC, Codec.AV1):
         for bucket, (sdr, hdr) in SEED_BITRATES[codec]["Movies"].items():
             for is_hdr, target in ((False, sdr), (True, hdr)):
                 session.add(
@@ -103,10 +118,14 @@ async def patch_library(
         "name", "path", "enabled", "paused", "output_codec", "container",
         "hdr_policy", "dv_policy", "date_filter_after", "priority",
         "include_extensions", "exclude_globs", "scan_cron", "dry_run",
+        "audio_codec", "audio_container", "audio_bitrate_kbps",
     )
     for field_name in simple_fields:
         if field_name in data and data[field_name] is not None:
             setattr(lib, field_name, data[field_name])
+    audio_error = target_error(lib.audio_codec, lib.audio_container, lib.audio_bitrate_kbps)
+    if audio_error is not None:
+        raise HTTPException(422, audio_error)
     if "min_gain_percent" in data and data["min_gain_percent"] is not None:
         lib.min_gain_percent = decimal.Decimal(f"{data['min_gain_percent']:.2f}")
     if payload.clear_date_filter:

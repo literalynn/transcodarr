@@ -575,7 +575,8 @@ export interface paths {
         };
         /**
          * Codecs
-         * @description Répartition des codecs avant/après (donut §7.4).
+         * @description Répartition des codecs avant/après (donut §7.4) : codec vidéo, ou
+         *     codec audio pour les bibliothèques musique.
          */
         get: operations["codecs_api_v1_stats_codecs_get"];
         put?: never;
@@ -597,7 +598,8 @@ export interface paths {
          * Gain By Bucket
          * @description Gain moyen par BUCKET de résolution — pas par résolution brute : un
          *     1920x804 cinémascope est du 1080p, sinon chaque crop créerait son
-         *     propre groupe d'un seul fichier.
+         *     propre groupe d'un seul fichier. Musique : par codec SOURCE (la
+         *     « resolution » porte alors le codec d'origine).
          */
         get: operations["gain_by_bucket_api_v1_stats_gain_by_bucket_get"];
         put?: never;
@@ -822,6 +824,8 @@ export interface components {
             media_id: number;
             /** Library Id */
             library_id: number;
+            /** @default video */
+            media_type?: components["schemas"]["MediaType"];
             /** Path */
             path: string;
             /** Gpu */
@@ -847,6 +851,17 @@ export interface components {
             /** Attempt */
             attempt?: number | null;
         };
+        /**
+         * AudioCodec
+         * @enum {string}
+         */
+        AudioCodec: "opus" | "aac" | "mp3";
+        /**
+         * AudioContainer
+         * @description Conteneur de sortie d'une bibliothèque musique (= extension du fichier).
+         * @enum {string}
+         */
+        AudioContainer: "opus" | "ogg" | "m4a" | "mp3";
         /** BitrateRuleIn */
         BitrateRuleIn: {
             codec: components["schemas"]["Codec"];
@@ -1200,6 +1215,17 @@ export interface components {
             hdr_policy?: components["schemas"]["HdrPolicy"];
             /** @default convert_to_hdr10 */
             dv_policy?: components["schemas"]["DvPolicy"];
+            /** @default video */
+            media_type?: components["schemas"]["MediaType"];
+            /** @default opus */
+            audio_codec?: components["schemas"]["AudioCodec"];
+            /** @default opus */
+            audio_container?: components["schemas"]["AudioContainer"];
+            /**
+             * Audio Bitrate Kbps
+             * @default 128
+             */
+            audio_bitrate_kbps?: number;
             /** Date Filter After */
             date_filter_after?: string | null;
             /**
@@ -1208,7 +1234,7 @@ export interface components {
              */
             priority?: number;
             /** Include Extensions */
-            include_extensions?: string[];
+            include_extensions?: string[] | null;
             /** Exclude Globs */
             exclude_globs?: string[];
             /**
@@ -1245,6 +1271,11 @@ export interface components {
             container: components["schemas"]["Container"];
             hdr_policy: components["schemas"]["HdrPolicy"];
             dv_policy: components["schemas"]["DvPolicy"];
+            media_type: components["schemas"]["MediaType"];
+            audio_codec: components["schemas"]["AudioCodec"];
+            audio_container: components["schemas"]["AudioContainer"];
+            /** Audio Bitrate Kbps */
+            audio_bitrate_kbps: number;
             /** Date Filter After */
             date_filter_after: string | null;
             /** Priority */
@@ -1284,6 +1315,10 @@ export interface components {
             container?: components["schemas"]["Container"] | null;
             hdr_policy?: components["schemas"]["HdrPolicy"] | null;
             dv_policy?: components["schemas"]["DvPolicy"] | null;
+            audio_codec?: components["schemas"]["AudioCodec"] | null;
+            audio_container?: components["schemas"]["AudioContainer"] | null;
+            /** Audio Bitrate Kbps */
+            audio_bitrate_kbps?: number | null;
             /** Date Filter After */
             date_filter_after?: string | null;
             /**
@@ -1339,6 +1374,10 @@ export interface components {
             resolution_bucket: components["schemas"]["ResolutionBucket"] | null;
             /** Video Bitrate Kbps */
             video_bitrate_kbps: number | null;
+            /** Audio Codec */
+            audio_codec?: string | null;
+            /** Audio Bitrate Kbps */
+            audio_bitrate_kbps?: number | null;
             /** Is Hdr */
             is_hdr: boolean | null;
             hdr_format: components["schemas"]["HdrFormat"] | null;
@@ -1408,6 +1447,10 @@ export interface components {
             resolution_bucket: components["schemas"]["ResolutionBucket"] | null;
             /** Video Bitrate Kbps */
             video_bitrate_kbps: number | null;
+            /** Audio Codec */
+            audio_codec?: string | null;
+            /** Audio Bitrate Kbps */
+            audio_bitrate_kbps?: number | null;
             /** Is Hdr */
             is_hdr: boolean | null;
             hdr_format: components["schemas"]["HdrFormat"] | null;
@@ -1456,6 +1499,12 @@ export interface components {
          * @enum {string}
          */
         MediaStatus: "pending" | "queued" | "processing" | "done" | "failed" | "skipped_no_gain" | "skipped_policy" | "ignored";
+        /**
+         * MediaType
+         * @description Type de bibliothèque : vidéo (GPU) ou musique (CPU).
+         * @enum {string}
+         */
+        MediaType: "video" | "music";
         /**
          * NoGainReviewRequest
          * @description Réévaluation des « sans gain » estimés (abandon anticipé, prédiction).
@@ -2577,7 +2626,9 @@ export interface operations {
     };
     summary_api_v1_stats_summary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                media_type?: components["schemas"]["MediaType"] | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2595,12 +2646,22 @@ export interface operations {
                     };
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     savings_over_time_api_v1_stats_savings_over_time_get: {
         parameters: {
             query?: {
                 days?: number | null;
+                media_type?: components["schemas"]["MediaType"] | null;
             };
             header?: never;
             path?: never;
@@ -2632,7 +2693,9 @@ export interface operations {
     };
     codecs_api_v1_stats_codecs_get: {
         parameters: {
-            query?: never;
+            query?: {
+                media_type?: components["schemas"]["MediaType"] | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2650,12 +2713,22 @@ export interface operations {
                     };
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     gain_by_bucket_api_v1_stats_gain_by_bucket_get: {
         parameters: {
             query?: {
                 days?: number | null;
+                media_type?: components["schemas"]["MediaType"] | null;
             };
             header?: never;
             path?: never;
@@ -2689,6 +2762,7 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number | null;
+                media_type?: components["schemas"]["MediaType"] | null;
             };
             header?: never;
             path?: never;
@@ -2722,6 +2796,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                media_type?: components["schemas"]["MediaType"] | null;
             };
             header?: never;
             path?: never;
@@ -2755,6 +2830,7 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number | null;
+                media_type?: components["schemas"]["MediaType"] | null;
             };
             header?: never;
             path?: never;
@@ -2788,6 +2864,7 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number | null;
+                media_type?: components["schemas"]["MediaType"] | null;
             };
             header?: never;
             path?: never;
@@ -2819,7 +2896,9 @@ export interface operations {
     };
     progress_by_library_api_v1_stats_progress_by_library_get: {
         parameters: {
-            query?: never;
+            query?: {
+                media_type?: components["schemas"]["MediaType"] | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2835,6 +2914,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

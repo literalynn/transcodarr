@@ -175,6 +175,8 @@ def default_app_settings(
         "preflight_gain_check": True,
         "preflight_decode_check": True,
         "auto_fallback": True,
+        # Encodages musique simultanés (CPU, hors slots GPU), 0 à 4
+        "audio_workers": 2,
         # Intégration Jellyfin optionnelle (DateCreated, §5.1)
         "jellyfin_url": None,
         "jellyfin_api_key": None,

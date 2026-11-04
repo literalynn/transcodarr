@@ -163,12 +163,14 @@ function WaitingTab({ search }: { search: string }) {
                       )}
                       {basename(file.path)}
                     </span>
-                    <span className="font-mono text-xs">{file.video_codec ?? "—"}</span>
+                    <span className="font-mono text-xs">{file.video_codec ?? file.audio_codec ?? "—"}</span>
                     <span className="font-mono text-xs">
                       {file.resolution_bucket ?? "—"}
                       {file.hdr_format && file.hdr_format !== "sdr" ? " HDR" : ""}
                     </span>
-                    <span className="font-mono text-xs">{formatBitrate(file.video_bitrate_kbps)}</span>
+                    <span className="font-mono text-xs">
+                      {formatBitrate(file.video_bitrate_kbps ?? file.audio_bitrate_kbps)}
+                    </span>
                     <span className="font-mono text-xs text-success">
                       {formatBytes(file.estimated_gain_bytes)}
                     </span>
@@ -729,7 +731,8 @@ function FailuresTab({
                     {basename(file.path)}
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    {libraryName(file.library_id)} · {file.video_codec ?? "?"} · {formatBytes(file.size_bytes)}
+                    {libraryName(file.library_id)} · {file.video_codec ?? file.audio_codec ?? "?"} ·{" "}
+                    {formatBytes(file.size_bytes)}
                   </div>
                 </td>
                 <td className="max-w-md px-2 py-2">

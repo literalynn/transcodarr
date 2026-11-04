@@ -24,6 +24,9 @@ export type JobPage = Schemas["JobPage"];
 export type ActiveJob = Schemas["ActiveJob"];
 export type QueueStateT = Schemas["QueueState"];
 export type Codec = Schemas["Codec"];
+export type MediaType = Schemas["MediaType"];
+export type AudioCodec = Schemas["AudioCodec"];
+export type AudioContainer = Schemas["AudioContainer"];
 export type MediaStatus = Schemas["MediaStatus"];
 export type JobState = Schemas["JobState"];
 export type ResolutionBucket = Schemas["ResolutionBucket"];
@@ -248,6 +251,13 @@ export async function fetchJson<T>(url: string): Promise<T> {
 /** Période des statistiques : nombre de jours, ou null = depuis toujours. */
 export type StatsPeriod = 1 | 7 | 30 | null;
 
-export function periodQuery(days: StatsPeriod): string {
-  return days === null ? "" : `?days=${days}`;
+/** Type de bibliothèque des statistiques : null = toutes. */
+export type MediaFilter = MediaType | null;
+
+export function statsQuery(days: StatsPeriod, media: MediaFilter): string {
+  const params = new URLSearchParams();
+  if (days !== null) params.set("days", String(days));
+  if (media !== null) params.set("media_type", media);
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }

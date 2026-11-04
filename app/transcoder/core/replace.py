@@ -26,7 +26,7 @@ import uuid
 from dataclasses import dataclass
 
 from transcoder.core.dovi import Hdr10Metadata
-from transcoder.enums import Container
+from transcoder.enums import AudioContainer, Container
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def check_free_space(directory: str, *, needed_bytes: int, min_free_gb: float) -
 def make_tmp_path(
     src_path: str,
     *,
-    container: Container,
+    container: Container | AudioContainer,
     tmp_strategy: str,
     tmp_dir: str,
 ) -> str:
@@ -84,7 +84,9 @@ def make_tmp_path(
     return os.path.join(base_dir, f"{uuid.uuid4().hex}.{container.value}")
 
 
-def make_dry_run_path(src_path: str, *, library_path: str, out_dir: str, container: Container) -> str:
+def make_dry_run_path(
+    src_path: str, *, library_path: str, out_dir: str, container: Container | AudioContainer
+) -> str:
     """Sortie dry-run : arborescence miroir sous dry_run_out_dir (§9.4)."""
     rel = os.path.relpath(src_path, library_path)
     stem, _ = os.path.splitext(rel)
@@ -156,7 +158,7 @@ def replace_original(
     job_id: int,
     trash_dir: str,
     immediate_delete: bool,
-    container: Container,
+    container: Container | AudioContainer,
 ) -> ReplaceResult:
     """Remplacement atomique (§5.6). À n'appeler qu'après les 9 validations.
 
@@ -171,6 +173,9 @@ def replace_original(
     stem, src_ext = os.path.splitext(src_path)
     final_path = f"{stem}.{container.value}"
     extension_changed = src_ext.lstrip(".").lower() != container.value
+    if extension_changed and os.path.exists(final_path):
+        # Ex. album.flac à côté d'un album.opus : jamais d'écrasement d'un autre fichier
+        raise ReplaceError(f"{final_path} existe déjà : remplacement refusé, original intact")
 
     # 1) fsync du nouveau fichier avant toute destruction
     _fsync_file(tmp_path)

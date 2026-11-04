@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from transcoder.core.audio import AudioTarget, cover_stream
 from transcoder.core.dovi import TreatmentPlan
 from transcoder.core.failures import describe_exit_code, is_crash_exit
 from transcoder.core.preflight import significant_decode_errors
@@ -509,10 +510,10 @@ async def _run_ffmpeg_with_progress(
 
 
 def integrity_result(
-    code: int, stderr: str, *, scope: str, after_seek: bool = False
+    code: int, stderr: str, *, scope: str, after_seek: bool = False, audio: bool = False
 ) -> CheckResult:
     """Interprète un décodage d'intégrité (pur, testé sans binaire)."""
-    errors = significant_decode_errors(stderr, after_seek=after_seek)
+    errors = significant_decode_errors(stderr, after_seek=after_seek, audio=audio)
     crashed = is_crash_exit(code) or (code != 0 and not errors)
     meta: dict[str, Any] = {"exit_code": code, "crashed": crashed}
     if code == 0 and not errors:
@@ -528,7 +529,7 @@ def integrity_result(
     return CheckResult(
         "5_integrity",
         False,
-        f"erreurs de décodage de la vidéo produite ({describe_exit_code(code)}) : "
+        f"erreurs de décodage du fichier produit ({describe_exit_code(code)}) : "
         + " | ".join(errors[:3])[:300],
         meta=meta,
     )
@@ -903,4 +904,132 @@ async def validate_output(
         len(report.checks),
         report.gain_percent or 0.0,
     )
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Bibliothèques musique
+# ---------------------------------------------------------------------------
+async def validate_audio_output(
+    *,
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    src_probe: MediaProbe,
+    src_size_bytes: int,
+    dst_path: str,
+    exit_code: int,
+    target: AudioTarget,
+    min_gain_percent: float,
+    on_check: CheckCallback | None = None,
+) -> ValidationReport:
+    """Contrôles bloquants d'un fichier musical, arrêt au premier échec.
+
+    Mêmes noms que la vidéo, donc mêmes catégories d'échec et mêmes replis ;
+    les contrôles propres à l'image (couleurs, HDR, DV) n'ont pas lieu d'être.
+    Le 3 vérifie aussi le marqueur anti-boucle (sans lui, le scan suivant ne
+    reconnaîtrait pas le fichier produit), le 6 la piste unique et la pochette."""
+    report = ValidationReport(outcome=ValidationOutcome.FAILED)
+    name = os.path.basename(dst_path)
+
+    async def _step(label: str) -> None:
+        logger.info("Validation %s : %s", name, label)
+        if on_check is not None:
+            await on_check(label)
+
+    def _fail(check: CheckResult) -> ValidationReport:
+        report.checks.append(check)
+        logger.warning("Validation %s : ÉCHEC %s — %s", name, check.name, check.detail)
+        return report
+
+    await _step("1/7 code de sortie ffmpeg")
+    c1 = check_exit_code(exit_code)
+    if not c1.ok:
+        return _fail(c1)
+    report.checks.append(c1)
+
+    await _step("2/7 présence et taille de la sortie")
+    try:
+        dst_size = os.path.getsize(dst_path)
+    except OSError:
+        dst_size = 0
+    c2 = check_output_size(dst_size or None)
+    if not c2.ok:
+        return _fail(c2)
+    report.checks.append(c2)
+
+    await _step("3/7 sonde ffprobe + codec cible")
+    try:
+        dst_probe = await probe_file(dst_path, ffprobe_path, frames=False)
+    except ProbeError as exc:
+        return _fail(CheckResult("3_codec", False, f"ffprobe a échoué : {exc}"))
+    report.dst_probe = dst_probe
+    problems: list[str] = []
+    if dst_probe.audio_codec != target.codec.value:
+        problems.append(f"codec audio = {dst_probe.audio_codec} (attendu {target.codec.value})")
+    if dst_probe.transcoder_tag != target.tag:
+        problems.append("marqueur anti-boucle illisible dans la sortie")
+    c3 = CheckResult(
+        "3_codec",
+        not problems,
+        " ; ".join(problems) or f"codec audio = {dst_probe.audio_codec}, marqueur présent",
+    )
+    if not c3.ok:
+        return _fail(c3)
+    report.checks.append(c3)
+
+    await _step("4/7 durée source/sortie")
+    c4 = check_duration(src_probe.duration_s, dst_probe.duration_s)
+    if not c4.ok:
+        # Durée conteneur estimée (MP3 VBR sans en-tête Xing…) : les paquets font foi
+        src_tl = await probe_stream_timeline(
+            src_probe.path, ffprobe_path, selector="a:0", full_scan=True
+        )
+        dst_tl = await probe_stream_timeline(dst_path, ffprobe_path, selector="a:0", full_scan=True)
+        if src_tl is not None and dst_tl is not None:
+            measured = check_duration(src_tl.duration_s, dst_tl.duration_s)
+            c4 = CheckResult(
+                "4_duration",
+                measured.ok,
+                f"durées conteneur : {c4.detail} ; paquets audio : {measured.detail}",
+            )
+    if not c4.ok:
+        return _fail(c4)
+    report.checks.append(c4)
+
+    await _step("5/7 intégrité (décodage complet)")
+    code, out = await _run_tool(
+        [
+            ffmpeg_path, "-hide_banner", "-nostdin",
+            "-v", "error", "-xerror",
+            "-i", dst_path,
+            "-map", "0:a:0",
+            "-f", "null", "-",
+        ],
+        timeout=1800.0,
+    )
+    c5 = integrity_result(code, out, scope="décodage intégral de l'audio", audio=True)
+    if not c5.ok:
+        return _fail(c5)
+    report.checks.append(c5)
+
+    await _step("6/7 piste audio et pochette")
+    cover_expected = cover_stream(src_probe.raw) is not None
+    cover_kept = cover_stream(dst_probe.raw) is not None
+    audio_count = len(dst_probe.audio_streams)
+    c6 = CheckResult(
+        "6_streams",
+        audio_count == 1 and (cover_kept or not cover_expected),
+        f"audio {audio_count}/1, pochette "
+        + ("conservée" if cover_kept else "absente de la sortie" if cover_expected else "aucune"),
+    )
+    if not c6.ok:
+        return _fail(c6)
+    report.checks.append(c6)
+
+    # 7 — gain (pas un échec : skipped_no_gain, original conservé)
+    await _step("7/7 gain de taille")
+    c7, gain, no_gain = check_gain(src_size_bytes, dst_size, min_gain_percent)
+    report.checks.append(c7)
+    report.gain_percent = gain
+    report.outcome = ValidationOutcome.NO_GAIN if no_gain else ValidationOutcome.PASSED
     return report

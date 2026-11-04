@@ -31,7 +31,7 @@ _ALLOWED_SETTINGS: frozenset[str] = frozenset(
         "queue_paused", "dv_ssim_threshold", "dv_chroma_delta_max",
         "validation_decode", "max_retries", "progress_snapshot_interval_s",
         "early_abort_no_gain", "preflight_gain_check", "preflight_decode_check",
-        "auto_fallback",
+        "auto_fallback", "audio_workers",
         "jellyfin_url", "jellyfin_api_key",
     }
 )
@@ -60,6 +60,8 @@ async def patch_settings(
         "data_tmp",
     ):
         raise HTTPException(422, "tmp_strategy doit être 'sibling' ou 'data_tmp'")
+    if "audio_workers" in payload.values and payload.values["audio_workers"] not in range(5):
+        raise HTTPException(422, "audio_workers doit être un entier de 0 à 4")
     for key, value in payload.values.items():
         stmt = (
             pg_insert(AppSetting)
@@ -100,6 +102,10 @@ async def export_config(session: AsyncSession = Depends(get_db)) -> schemas.Conf
                 "container": lib.container.value,
                 "hdr_policy": lib.hdr_policy.value,
                 "dv_policy": lib.dv_policy.value,
+                "media_type": lib.media_type.value,
+                "audio_codec": lib.audio_codec.value,
+                "audio_container": lib.audio_container.value,
+                "audio_bitrate_kbps": lib.audio_bitrate_kbps,
                 "date_filter_after": lib.date_filter_after.isoformat()
                 if lib.date_filter_after
                 else None,
@@ -151,7 +157,18 @@ async def import_config(
     if payload.version != 1:
         raise HTTPException(422, f"version d'export non supportée : {payload.version}")
 
-    from transcoder.enums import Codec, Container, DvPolicy, GpuApi, HdrPolicy, ResolutionBucket
+    from transcoder.core.audio import target_error
+    from transcoder.enums import (
+        AudioCodec,
+        AudioContainer,
+        Codec,
+        Container,
+        DvPolicy,
+        GpuApi,
+        HdrPolicy,
+        MediaType,
+        ResolutionBucket,
+    )
     import decimal
 
     n_settings = 0
@@ -195,6 +212,13 @@ async def import_config(
         lib.container = Container(str(entry.get("container", "mkv")))
         lib.hdr_policy = HdrPolicy(str(entry.get("hdr_policy", "preserve")))
         lib.dv_policy = DvPolicy(str(entry.get("dv_policy", "convert_to_hdr10")))
+        lib.media_type = MediaType(str(entry.get("media_type", "video")))
+        lib.audio_codec = AudioCodec(str(entry.get("audio_codec", "opus")))
+        lib.audio_container = AudioContainer(str(entry.get("audio_container", "opus")))
+        lib.audio_bitrate_kbps = int(entry.get("audio_bitrate_kbps", 128))
+        audio_error = target_error(lib.audio_codec, lib.audio_container, lib.audio_bitrate_kbps)
+        if audio_error is not None:
+            raise HTTPException(422, f"bibliothèque {lib.name} : {audio_error}")
         raw_date = entry.get("date_filter_after")
         lib.date_filter_after = (
             datetime.datetime.fromisoformat(str(raw_date)) if raw_date else None

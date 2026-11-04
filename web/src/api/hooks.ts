@@ -19,10 +19,11 @@ import {
   type LibraryCreate,
   type LibraryPatch,
   type LibraryProgress,
+  type MediaFilter,
   type ReliabilityStats,
   type SavingsStats,
   type StatsPeriod,
-  periodQuery,
+  statsQuery,
   type StatsSummary,
   type ThroughputStats,
   type TopRemainingItem,
@@ -212,69 +213,90 @@ export function useCapabilities(): UseQueryResult<CapabilitiesInfo> {
 }
 
 // --- Stats (§7.4) -----------------------------------------------------------
-export const useStatsSummary = (): UseQueryResult<StatsSummary> =>
+export const useStatsSummary = (media: MediaFilter = null): UseQueryResult<StatsSummary> =>
   useQuery({
-    queryKey: ["stats", "summary"],
+    queryKey: ["stats", "summary", media],
     refetchInterval: 15000,
-    queryFn: () => fetchJson<StatsSummary>("/api/v1/stats/summary"),
+    queryFn: () => fetchJson<StatsSummary>(`/api/v1/stats/summary${statsQuery(null, media)}`),
   });
 
-export const useSavingsOverTime = (days: StatsPeriod): UseQueryResult<SavingsStats> =>
+export const useSavingsOverTime = (
+  days: StatsPeriod,
+  media: MediaFilter = null,
+): UseQueryResult<SavingsStats> =>
   useQuery({
-    queryKey: ["stats", "savings", days],
+    queryKey: ["stats", "savings", days, media],
     refetchInterval: 60000,
     placeholderData: (previous) => previous,
-    queryFn: () => fetchJson<SavingsStats>(`/api/v1/stats/savings-over-time${periodQuery(days)}`),
+    queryFn: () =>
+      fetchJson<SavingsStats>(`/api/v1/stats/savings-over-time${statsQuery(days, media)}`),
   });
 
-export const useCodecStats = (): UseQueryResult<CodecStats> =>
+export const useCodecStats = (media: MediaFilter = null): UseQueryResult<CodecStats> =>
   useQuery({
-    queryKey: ["stats", "codecs"],
-    queryFn: () => fetchJson<CodecStats>("/api/v1/stats/codecs"),
+    queryKey: ["stats", "codecs", media],
+    queryFn: () => fetchJson<CodecStats>(`/api/v1/stats/codecs${statsQuery(null, media)}`),
   });
 
-export const useGainByBucket = (days: StatsPeriod): UseQueryResult<GainByBucket[]> =>
+export const useGainByBucket = (
+  days: StatsPeriod,
+  media: MediaFilter = null,
+): UseQueryResult<GainByBucket[]> =>
   useQuery({
-    queryKey: ["stats", "gain-by-bucket", days],
+    queryKey: ["stats", "gain-by-bucket", days, media],
     refetchInterval: 60000,
     placeholderData: (previous) => previous,
-    queryFn: () => fetchJson<GainByBucket[]>(`/api/v1/stats/gain-by-bucket${periodQuery(days)}`),
+    queryFn: () =>
+      fetchJson<GainByBucket[]>(`/api/v1/stats/gain-by-bucket${statsQuery(days, media)}`),
   });
 
-export const useThroughput = (days: StatsPeriod): UseQueryResult<ThroughputStats> =>
+export const useThroughput = (
+  days: StatsPeriod,
+  media: MediaFilter = null,
+): UseQueryResult<ThroughputStats> =>
   useQuery({
-    queryKey: ["stats", "throughput", days],
+    queryKey: ["stats", "throughput", days, media],
     refetchInterval: 60000,
     placeholderData: (previous) => previous,
-    queryFn: () => fetchJson<ThroughputStats>(`/api/v1/stats/throughput${periodQuery(days)}`),
+    queryFn: () =>
+      fetchJson<ThroughputStats>(`/api/v1/stats/throughput${statsQuery(days, media)}`),
   });
 
-export const useTopRemaining = (): UseQueryResult<TopRemainingItem[]> =>
+export const useTopRemaining = (media: MediaFilter = null): UseQueryResult<TopRemainingItem[]> =>
   useQuery({
-    queryKey: ["stats", "top-remaining"],
-    queryFn: () => fetchJson<TopRemainingItem[]>("/api/v1/stats/top-remaining"),
+    queryKey: ["stats", "top-remaining", media],
+    queryFn: () =>
+      fetchJson<TopRemainingItem[]>(`/api/v1/stats/top-remaining${statsQuery(null, media)}`),
   });
 
-export const useFailures = (days: StatsPeriod = null): UseQueryResult<FailureStats> =>
+export const useFailures = (
+  days: StatsPeriod = null,
+  media: MediaFilter = null,
+): UseQueryResult<FailureStats> =>
   useQuery({
-    queryKey: ["stats", "failures", days],
+    queryKey: ["stats", "failures", days, media],
     refetchInterval: 30000,
     placeholderData: (previous) => previous,
-    queryFn: () => fetchJson<FailureStats>(`/api/v1/stats/failures${periodQuery(days)}`),
+    queryFn: () => fetchJson<FailureStats>(`/api/v1/stats/failures${statsQuery(days, media)}`),
   });
 
-export const useReliability = (days: StatsPeriod): UseQueryResult<ReliabilityStats> =>
+export const useReliability = (
+  days: StatsPeriod,
+  media: MediaFilter = null,
+): UseQueryResult<ReliabilityStats> =>
   useQuery({
-    queryKey: ["stats", "reliability", days],
+    queryKey: ["stats", "reliability", days, media],
     refetchInterval: 30000,
     placeholderData: (previous) => previous,
-    queryFn: () => fetchJson<ReliabilityStats>(`/api/v1/stats/reliability${periodQuery(days)}`),
+    queryFn: () =>
+      fetchJson<ReliabilityStats>(`/api/v1/stats/reliability${statsQuery(days, media)}`),
   });
 
-export const useLibraryProgress = (): UseQueryResult<LibraryProgress[]> =>
+export const useLibraryProgress = (media: MediaFilter = null): UseQueryResult<LibraryProgress[]> =>
   useQuery({
-    queryKey: ["stats", "progress-by-library"],
-    queryFn: () => fetchJson<LibraryProgress[]>("/api/v1/stats/progress-by-library"),
+    queryKey: ["stats", "progress-by-library", media],
+    queryFn: () =>
+      fetchJson<LibraryProgress[]>(`/api/v1/stats/progress-by-library${statsQuery(null, media)}`),
   });
 
 // --- Mutations ---------------------------------------------------------------

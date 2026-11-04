@@ -169,6 +169,7 @@ const SETTING_FIELDS: {
 }[] = [
   { key: "dry_run_global", label: "Dry-run global (aucun remplacement)", type: "bool" },
   { key: "max_concurrent_jobs", label: "Concurrence max", type: "number" },
+  { key: "audio_workers", label: "Encodages musique simultanés (CPU, 0 à 4)", type: "number" },
   { key: "min_free_disk_gb", label: "Espace disque minimal (Go)", type: "number" },
   { key: "tmp_strategy", label: "Stratégie tmp", type: "select", options: ["sibling", "data_tmp"] },
   { key: "tmp_dir", label: "Dossier temporaire", type: "text", mono: true },

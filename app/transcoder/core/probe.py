@@ -15,6 +15,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from transcoder import TOOL_NAME
 from transcoder.core.buckets import bucket_for_height
 from transcoder.enums import HdrFormat, ResolutionBucket
 
@@ -102,6 +103,9 @@ class MediaProbe:
     content_light: ContentLightLevel | None
 
     # --- Autres flux --------------------------------------------------------
+    # Première piste audio : codec et débit (bibliothèques musique)
+    audio_codec: str | None = None
+    audio_bitrate_kbps: int | None = None
     audio_streams: list[dict[str, Any]] = field(default_factory=list)
     subtitle_streams: list[dict[str, Any]] = field(default_factory=list)
     video_stream_count: int = 0
@@ -162,6 +166,11 @@ def _tag(tags: dict[str, Any], key: str) -> str | None:
         if k.upper() == key.upper() and isinstance(v, str):
             return v
     return None
+
+
+def _own_encoder_tag(tags: dict[str, Any]) -> str | None:
+    value = _tag(tags, "encoder")
+    return value if value is not None and value.startswith(f"{TOOL_NAME}-") else None
 
 
 def _bit_depth_from_pix_fmt(pix_fmt: str | None, bits_per_raw_sample: Any) -> int | None:
@@ -364,6 +373,19 @@ def parse_probe(
     )
     data_count = sum(1 for s in streams if _as_dict(s).get("codec_type") == "data")
 
+    # Débit audio : bit_rate de la piste, tag BPS (Matroska), sinon débit
+    # global pour un fichier sans vidéo (FLAC/WAV n'annoncent pas de débit par piste)
+    audio = next(
+        (_as_dict(s) for s in streams if _as_dict(s).get("codec_type") == "audio"), {}
+    )
+    audio_tags = _as_dict(audio.get("tags"))
+    audio_bitrate_bps = (
+        _opt_int(audio.get("bit_rate"))
+        or _opt_int(_tag(audio_tags, "BPS") or _tag(audio_tags, "BPS-eng"))
+        or (None if video else _opt_int(fmt.get("bit_rate")))
+    )
+    audio_codec_raw = audio.get("codec_name")
+
     fmt_tags = _as_dict(fmt.get("tags"))
     codec_name_raw = video.get("codec_name")
     format_name_raw = fmt.get("format_name")
@@ -394,13 +416,21 @@ def parse_probe(
         dv_has_rpu=dv_has_rpu,
         mastering_display=mastering,
         content_light=cll,
+        audio_codec=audio_codec_raw if isinstance(audio_codec_raw, str) else None,
+        audio_bitrate_kbps=audio_bitrate_bps // 1000 if audio_bitrate_bps else None,
         audio_streams=audio_streams,
         subtitle_streams=subtitle_streams,
         video_stream_count=video_count,
         chapter_count=len(chapters),
         attachment_count=attachment_count,
         data_stream_count=data_count,
-        transcoder_tag=_tag(fmt_tags, "TRANSCODER_TAG"),
+        transcoder_tag=(
+            _tag(fmt_tags, "TRANSCODER_TAG")
+            # Ogg (Opus/Vorbis) : les tags globaux sont des commentaires de la piste
+            or _tag(audio_tags, "TRANSCODER_TAG")
+            # M4A : écrit dans l'outil d'encodage (©too), relu « encoder » (core/audio.py)
+            or _own_encoder_tag(fmt_tags)
+        ),
         raw=format_json,
     )
 
@@ -430,8 +460,9 @@ async def _run_ffprobe(args: list[str]) -> dict[str, Any]:
     return _as_dict(parsed)
 
 
-async def probe_file(path: str, ffprobe_path: str) -> MediaProbe:
-    """Sonde complète d'un fichier : format/streams/chapters + 1re frame vidéo."""
+async def probe_file(path: str, ffprobe_path: str, *, frames: bool = True) -> MediaProbe:
+    """Sonde complète d'un fichier : format/streams/chapters + 1re frame vidéo
+    (``frames=False`` : sans la 2e passe, inutile pour la musique)."""
     format_json = await _run_ffprobe(
         [
             ffprobe_path,
@@ -451,7 +482,9 @@ async def probe_file(path: str, ffprobe_path: str) -> MediaProbe:
     )
     # Side data de la première frame (DOVI/MDCV/CLL/HDR10+). Peut échouer sur
     # un fichier corrompu : la sonde principale reste exploitable.
-    frames_json: dict[str, Any] | None
+    frames_json: dict[str, Any] | None = None
+    if not frames:
+        return parse_probe(path, format_json)
     try:
         frames_json = await _run_ffprobe(
             [

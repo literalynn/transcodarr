@@ -30,6 +30,8 @@ from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from transcoder.enums import (
+    AudioCodec,
+    AudioContainer,
     Codec,
     Container,
     DvPolicy,
@@ -38,6 +40,7 @@ from transcoder.enums import (
     HdrPolicy,
     JobState,
     MediaStatus,
+    MediaType,
     ResolutionBucket,
     pg_values,
 )
@@ -65,6 +68,9 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 class Library(Base):
     __tablename__ = "libraries"
+    __table_args__ = (
+        CheckConstraint("audio_bitrate_kbps BETWEEN 32 AND 512", name="ck_audio_bitrate_range"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
@@ -84,6 +90,21 @@ class Library(Base):
     )
     dv_policy: Mapped[DvPolicy] = mapped_column(
         _pg_enum(DvPolicy), nullable=False, server_default=text("'convert_to_hdr10'")
+    )
+
+    # Musique (migration 0005) : encodage CPU vers une cible audio unique,
+    # les champs vidéo ci-dessus et l'échelle de bitrates sont alors ignorés
+    media_type: Mapped[MediaType] = mapped_column(
+        _pg_enum(MediaType), nullable=False, server_default=text("'video'")
+    )
+    audio_codec: Mapped[AudioCodec] = mapped_column(
+        _pg_enum(AudioCodec), nullable=False, server_default=text("'opus'")
+    )
+    audio_container: Mapped[AudioContainer] = mapped_column(
+        _pg_enum(AudioContainer), nullable=False, server_default=text("'opus'")
+    )
+    audio_bitrate_kbps: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("128")
     )
 
     date_filter_after: Mapped[datetime.datetime | None] = mapped_column(
@@ -224,6 +245,9 @@ class MediaFile(Base):
     dv_bl_compat_id: Mapped[int | None] = mapped_column(Integer)
     dv_has_el: Mapped[bool | None] = mapped_column(Boolean)
 
+    # Première piste audio (bibliothèques musique : codec et débit source)
+    audio_codec: Mapped[str | None] = mapped_column(Text)
+    audio_bitrate_kbps: Mapped[int | None] = mapped_column(Integer)
     audio_streams: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     subtitle_streams: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     probe: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

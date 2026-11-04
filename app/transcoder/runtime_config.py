@@ -50,6 +50,8 @@ class RuntimeConfig:
     auto_fallback: bool
     jellyfin_url: str | None
     jellyfin_api_key: str | None
+    # Workers CPU des bibliothèques musique (0 = musique en attente)
+    audio_workers: int = 2
 
 
 def _str(values: dict[str, Any], key: str, default: str) -> str:
@@ -107,6 +109,7 @@ def config_from_values(values: dict[str, Any]) -> RuntimeConfig:
         auto_fallback=_bool(values, "auto_fallback", True),
         jellyfin_url=_opt_str(values, "jellyfin_url"),
         jellyfin_api_key=_opt_str(values, "jellyfin_api_key"),
+        audio_workers=_int(values, "audio_workers", 2),
     )
 
 

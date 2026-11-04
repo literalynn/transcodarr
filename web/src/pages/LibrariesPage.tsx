@@ -1,12 +1,16 @@
-/** Bibliothèques (§7.5) : config complète + tableaux de bitrates HEVC/AV1. */
+/** Bibliothèques (§7.5) : config complète + tableaux de bitrates HEVC/AV1,
+ *  ou cible audio (codec, conteneur, débit) pour une bibliothèque musique. */
 
 import { Plus, Save, ScanSearch, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
+  type AudioCodec,
+  type AudioContainer,
   type BitrateRuleIn,
   type Codec,
   type Library,
+  type MediaType,
 } from "@/api/client";
 import {
   useBitrateRules,
@@ -28,6 +32,90 @@ import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const BUCKETS = ["2160p", "1440p", "1080p", "720p", "576p", "480p"] as const;
+
+// Miroir de core/audio.py (CONTAINERS, MAX_KBPS) : le serveur revalide
+const AUDIO_CONTAINERS: Record<AudioCodec, AudioContainer[]> = {
+  opus: ["opus", "ogg"],
+  aac: ["m4a"],
+  mp3: ["mp3"],
+};
+const AUDIO_MAX_KBPS: Record<AudioCodec, number> = { opus: 510, aac: 512, mp3: 320 };
+
+type AudioTarget = Pick<Library, "audio_codec" | "audio_container" | "audio_bitrate_kbps">;
+
+const DEFAULT_AUDIO_TARGET: AudioTarget = {
+  audio_codec: "opus",
+  audio_container: "opus",
+  audio_bitrate_kbps: 128,
+};
+
+// ---------------------------------------------------------------------------
+// Cible audio d'une bibliothèque musique (création et édition)
+// ---------------------------------------------------------------------------
+function AudioTargetFields({
+  value,
+  onChange,
+}: {
+  value: AudioTarget;
+  onChange: (change: Partial<AudioTarget>) => void;
+}) {
+  const t = useT();
+  const maxKbps = AUDIO_MAX_KBPS[value.audio_codec];
+  return (
+    <>
+      <div>
+        <Label>{t("Codec audio cible")}</Label>
+        <Select
+          value={value.audio_codec}
+          onChange={(e) => {
+            const codec = e.target.value as AudioCodec;
+            // Conteneur et débit suivent le codec : la combinaison reste valide
+            onChange({
+              audio_codec: codec,
+              audio_container: AUDIO_CONTAINERS[codec][0],
+              audio_bitrate_kbps: Math.min(value.audio_bitrate_kbps, AUDIO_MAX_KBPS[codec]),
+            });
+          }}
+        >
+          <option value="opus">Opus</option>
+          <option value="aac">AAC</option>
+          <option value="mp3">MP3</option>
+        </Select>
+      </div>
+      <div>
+        <Label>{t("Conteneur")}</Label>
+        <Select
+          value={value.audio_container}
+          onChange={(e) => onChange({ audio_container: e.target.value as AudioContainer })}
+        >
+          {AUDIO_CONTAINERS[value.audio_codec].map((c) => (
+            <option key={c} value={c}>
+              .{c}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div>
+        <Label>
+          {t("Débit cible (kbps)")} · 32–{maxKbps}
+        </Label>
+        <Input
+          key={`${value.audio_codec}-${value.audio_bitrate_kbps}`}
+          type="number"
+          min={32}
+          max={maxKbps}
+          defaultValue={value.audio_bitrate_kbps}
+          onBlur={(e) => onChange({ audio_bitrate_kbps: Number(e.target.value) })}
+        />
+      </div>
+      {value.audio_container === "m4a" && (
+        <p className="col-span-full text-xs text-warning">
+          {t("M4A : les tags non standard (MusicBrainz, etc.) ne sont pas conservés.")}
+        </p>
+      )}
+    </>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Tableau de bitrates éditable pour un codec (onglets HEVC / AV1, §7.5)
@@ -149,6 +237,7 @@ function LibraryEditor({ library }: { library: Library }) {
   const patch = usePatchLibrary();
   const del = useDeleteLibrary();
   const scan = useTriggerScan();
+  const music = library.media_type === "music";
   const [confirmCodec, setConfirmCodec] = useState<{ codec: Codec; count: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -167,6 +256,7 @@ function LibraryEditor({ library }: { library: Library }) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h3 className="font-semibold">{library.name}</h3>
+            <Badge variant="info">{music ? t("Musique") : t("Vidéo")}</Badge>
             <span className="font-mono text-xs text-muted-foreground">{library.path}</span>
             {!library.enabled && <Badge variant="warning">{t("désactivée")}</Badge>}
             {library.paused && <Badge variant="warning">{t("en pause")}</Badge>}
@@ -187,62 +277,76 @@ function LibraryEditor({ library }: { library: Library }) {
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <Label>{t("Codec de sortie")}</Label>
-            <Select
-              value={library.output_codec}
-              onChange={(e) => void requestCodecChange(e.target.value as Codec)}
-            >
-              <option value="hevc">HEVC (H.265)</option>
-              <option value="av1">AV1</option>
-            </Select>
-          </div>
-          <div>
-            <Label>{t("Conteneur")}</Label>
-            <Select
-              value={library.container}
-              onChange={(e) =>
-                patch.mutate({
-                  id: library.id,
-                  patch: { container: e.target.value as Library["container"] },
-                })
-              }
-            >
-              <option value="mkv">{t("MKV (recommandé)")}</option>
-              <option value="mp4">MP4</option>
-            </Select>
-          </div>
-          <div>
-            <Label>{t("Politique HDR")}</Label>
-            <Select
-              value={library.hdr_policy}
-              onChange={(e) =>
-                patch.mutate({
-                  id: library.id,
-                  patch: { hdr_policy: e.target.value as Library["hdr_policy"] },
-                })
-              }
-            >
-              <option value="preserve">{t("Préserver le HDR")}</option>
-              <option value="tonemap_sdr">{t("Tonemap vers SDR")}</option>
-              <option value="skip_hdr_files">{t("Ignorer les fichiers HDR")}</option>
-            </Select>
-          </div>
-          <div>
-            <Label>{t("Politique Dolby Vision")}</Label>
-            <Select
-              value={library.dv_policy}
-              onChange={(e) =>
-                patch.mutate({
-                  id: library.id,
-                  patch: { dv_policy: e.target.value as Library["dv_policy"] },
-                })
-              }
-            >
-              <option value="convert_to_hdr10">{t("Convertir en HDR10")}</option>
-              <option value="skip_dv_files">{t("Ignorer les fichiers DV")}</option>
-            </Select>
-          </div>
+          {music ? (
+            <>
+              <AudioTargetFields
+                value={library}
+                onChange={(change) => patch.mutate({ id: library.id, patch: change })}
+              />
+              <p className="col-span-full text-xs text-muted-foreground">
+                {t("Changer la cible remet en file les fichiers déjà réencodés.")}
+              </p>
+            </>
+          ) : (
+            <>
+              <div>
+                <Label>{t("Codec de sortie")}</Label>
+                <Select
+                  value={library.output_codec}
+                  onChange={(e) => void requestCodecChange(e.target.value as Codec)}
+                >
+                  <option value="hevc">HEVC (H.265)</option>
+                  <option value="av1">AV1</option>
+                </Select>
+              </div>
+              <div>
+                <Label>{t("Conteneur")}</Label>
+                <Select
+                  value={library.container}
+                  onChange={(e) =>
+                    patch.mutate({
+                      id: library.id,
+                      patch: { container: e.target.value as Library["container"] },
+                    })
+                  }
+                >
+                  <option value="mkv">{t("MKV (recommandé)")}</option>
+                  <option value="mp4">MP4</option>
+                </Select>
+              </div>
+              <div>
+                <Label>{t("Politique HDR")}</Label>
+                <Select
+                  value={library.hdr_policy}
+                  onChange={(e) =>
+                    patch.mutate({
+                      id: library.id,
+                      patch: { hdr_policy: e.target.value as Library["hdr_policy"] },
+                    })
+                  }
+                >
+                  <option value="preserve">{t("Préserver le HDR")}</option>
+                  <option value="tonemap_sdr">{t("Tonemap vers SDR")}</option>
+                  <option value="skip_hdr_files">{t("Ignorer les fichiers HDR")}</option>
+                </Select>
+              </div>
+              <div>
+                <Label>{t("Politique Dolby Vision")}</Label>
+                <Select
+                  value={library.dv_policy}
+                  onChange={(e) =>
+                    patch.mutate({
+                      id: library.id,
+                      patch: { dv_policy: e.target.value as Library["dv_policy"] },
+                    })
+                  }
+                >
+                  <option value="convert_to_hdr10">{t("Convertir en HDR10")}</option>
+                  <option value="skip_dv_files">{t("Ignorer les fichiers DV")}</option>
+                </Select>
+              </div>
+            </>
+          )}
           <div>
             <Label>{t("Ne traiter que les fichiers ajoutés après le…")}</Label>
             <Input
@@ -343,30 +447,32 @@ function LibraryEditor({ library }: { library: Library }) {
         </div>
 
         {/* Deux onglets de bitrates, l'actif mis en évidence (§7.5) */}
-        <Tabs defaultValue={library.output_codec}>
-          <TabsList>
-            <TabsTrigger value="hevc">
-              {t("Échelle HEVC")} {library.output_codec === "hevc" && "●"}
-            </TabsTrigger>
-            <TabsTrigger value="av1">
-              {t("Échelle AV1")} {library.output_codec === "av1" && "●"}
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="hevc" className="mt-2">
-            <BitrateTable
-              libraryId={library.id}
-              codec="hevc"
-              active={library.output_codec === "hevc"}
-            />
-          </TabsContent>
-          <TabsContent value="av1" className="mt-2">
-            <BitrateTable
-              libraryId={library.id}
-              codec="av1"
-              active={library.output_codec === "av1"}
-            />
-          </TabsContent>
-        </Tabs>
+        {!music && (
+          <Tabs defaultValue={library.output_codec}>
+            <TabsList>
+              <TabsTrigger value="hevc">
+                {t("Échelle HEVC")} {library.output_codec === "hevc" && "●"}
+              </TabsTrigger>
+              <TabsTrigger value="av1">
+                {t("Échelle AV1")} {library.output_codec === "av1" && "●"}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="hevc" className="mt-2">
+              <BitrateTable
+                libraryId={library.id}
+                codec="hevc"
+                active={library.output_codec === "hevc"}
+              />
+            </TabsContent>
+            <TabsContent value="av1" className="mt-2">
+              <BitrateTable
+                libraryId={library.id}
+                codec="av1"
+                active={library.output_codec === "av1"}
+              />
+            </TabsContent>
+          </Tabs>
+        )}
       </CardContent>
 
       {/* Confirmation de changement de codec (§7.5) */}
@@ -435,6 +541,8 @@ export function LibrariesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPath, setNewPath] = useState("");
+  const [newType, setNewType] = useState<MediaType>("video");
+  const [newAudio, setNewAudio] = useState<AudioTarget>(DEFAULT_AUDIO_TARGET);
   const [createError, setCreateError] = useState<string | null>(null);
 
   return (
@@ -466,6 +574,19 @@ export function LibrariesPage() {
                 onChange={(e) => setNewPath(e.target.value)}
               />
             </div>
+            <div>
+              <Label>{t("Type")}</Label>
+              <Select value={newType} onChange={(e) => setNewType(e.target.value as MediaType)}>
+                <option value="video">{t("Vidéo")}</option>
+                <option value="music">{t("Musique")}</option>
+              </Select>
+            </div>
+            {newType === "music" && (
+              <AudioTargetFields
+                value={newAudio}
+                onChange={(change) => setNewAudio((a) => ({ ...a, ...change }))}
+              />
+            )}
             {createError && <p className="text-sm text-destructive">{createError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setShowCreate(false)}>
@@ -475,12 +596,19 @@ export function LibrariesPage() {
                 disabled={!newName || !newPath || create.isPending}
                 onClick={() =>
                   create.mutate(
-                    { name: newName, path: newPath } as Parameters<typeof create.mutate>[0],
+                    {
+                      name: newName,
+                      path: newPath,
+                      media_type: newType,
+                      ...(newType === "music" ? newAudio : {}),
+                    } as Parameters<typeof create.mutate>[0],
                     {
                       onSuccess: () => {
                         setShowCreate(false);
                         setNewName("");
                         setNewPath("");
+                        setNewType("video");
+                        setNewAudio(DEFAULT_AUDIO_TARGET);
                         setCreateError(null);
                       },
                       onError: (err) =>

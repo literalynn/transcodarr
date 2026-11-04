@@ -8,6 +8,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from transcoder.enums import (
+    AudioCodec,
+    AudioContainer,
     Codec,
     Container,
     DvPolicy,
@@ -16,6 +18,7 @@ from transcoder.enums import (
     HdrPolicy,
     JobState,
     MediaStatus,
+    MediaType,
     ResolutionBucket,
 )
 
@@ -56,6 +59,10 @@ class LibraryOut(_OrmModel):
     container: Container
     hdr_policy: HdrPolicy
     dv_policy: DvPolicy
+    media_type: MediaType
+    audio_codec: AudioCodec
+    audio_container: AudioContainer
+    audio_bitrate_kbps: int
     date_filter_after: datetime.datetime | None
     priority: int
     include_extensions: list[str]
@@ -74,11 +81,15 @@ class LibraryCreate(BaseModel):
     container: Container = Container.MKV
     hdr_policy: HdrPolicy = HdrPolicy.PRESERVE
     dv_policy: DvPolicy = DvPolicy.CONVERT_TO_HDR10
+    # Type choisi à la création (non modifiable ensuite) ; cible audio : musique
+    media_type: MediaType = MediaType.VIDEO
+    audio_codec: AudioCodec = AudioCodec.OPUS
+    audio_container: AudioContainer = AudioContainer.OPUS
+    audio_bitrate_kbps: int = Field(default=128, ge=32, le=512)
     date_filter_after: datetime.datetime | None = None
     priority: int = 0
-    include_extensions: list[str] = Field(
-        default_factory=lambda: ["mkv", "mp4", "m2ts", "ts", "avi", "mov", "wmv"]
-    )
+    # None = extensions par défaut du type de bibliothèque
+    include_extensions: list[str] | None = None
     exclude_globs: list[str] = Field(default_factory=list)
     min_gain_percent: float = 5.0
     scan_cron: str | None = "0 3 * * *"
@@ -95,6 +106,9 @@ class LibraryPatch(BaseModel):
     container: Container | None = None
     hdr_policy: HdrPolicy | None = None
     dv_policy: DvPolicy | None = None
+    audio_codec: AudioCodec | None = None
+    audio_container: AudioContainer | None = None
+    audio_bitrate_kbps: int | None = Field(default=None, ge=32, le=512)
     date_filter_after: datetime.datetime | None = None
     clear_date_filter: bool = False
     priority: int | None = None
@@ -171,6 +185,8 @@ class MediaFileOut(_OrmModel):
     height: int | None
     resolution_bucket: ResolutionBucket | None
     video_bitrate_kbps: int | None
+    audio_codec: str | None = None
+    audio_bitrate_kbps: int | None = None
     is_hdr: bool | None
     hdr_format: HdrFormat | None
     dv_profile: int | None
@@ -272,6 +288,7 @@ class ActiveJob(BaseModel):
     phase: str | None = None
     media_id: int
     library_id: int
+    media_type: MediaType = MediaType.VIDEO
     path: str
     gpu: str
     drm_node: str

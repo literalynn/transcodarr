@@ -1650,15 +1650,43 @@
     "summary": "Summary",
     "description": "KPIs du dashboard : traités/total, Go récupérés, gain moyen, débit, ETA.",
     "operationId": "summary_api_v1_stats_summary_get",
+    "parameters": [
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Summary Api V1 Stats Summary Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -1691,6 +1719,22 @@
         }
        ],
        "title": "Days"
+      }
+     },
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
       }
      }
     ],
@@ -1726,17 +1770,45 @@
      "stats"
     ],
     "summary": "Codecs",
-    "description": "Répartition des codecs avant/après (donut §7.4).",
+    "description": "Répartition des codecs avant/après (donut §7.4) : codec vidéo, ou\ncodec audio pour les bibliothèques musique.",
     "operationId": "codecs_api_v1_stats_codecs_get",
+    "parameters": [
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Codecs Api V1 Stats Codecs Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -1750,7 +1822,7 @@
      "stats"
     ],
     "summary": "Gain By Bucket",
-    "description": "Gain moyen par BUCKET de résolution — pas par résolution brute : un\n1920x804 cinémascope est du 1080p, sinon chaque crop créerait son\npropre groupe d'un seul fichier.",
+    "description": "Gain moyen par BUCKET de résolution — pas par résolution brute : un\n1920x804 cinémascope est du 1080p, sinon chaque crop créerait son\npropre groupe d'un seul fichier. Musique : par codec SOURCE (la\n« resolution » porte alors le codec d'origine).",
     "operationId": "gain_by_bucket_api_v1_stats_gain_by_bucket_get",
     "parameters": [
      {
@@ -1769,6 +1841,22 @@
         }
        ],
        "title": "Days"
+      }
+     },
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
       }
      }
     ],
@@ -1827,6 +1915,22 @@
        ],
        "title": "Days"
       }
+     },
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
      }
     ],
     "responses": {
@@ -1874,6 +1978,22 @@
        "minimum": 1,
        "default": 20,
        "title": "Limit"
+      }
+     },
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
       }
      }
     ],
@@ -1932,6 +2052,22 @@
        ],
        "title": "Days"
       }
+     },
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
      }
     ],
     "responses": {
@@ -1986,6 +2122,22 @@
        ],
        "title": "Days"
       }
+     },
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
      }
     ],
     "responses": {
@@ -2022,18 +2174,46 @@
     "summary": "Progress By Library",
     "description": "% de fichiers conformes (bon codec ET bon bitrate) par bibliothèque.",
     "operationId": "progress_by_library_api_v1_stats_progress_by_library_get",
+    "parameters": [
+     {
+      "name": "media_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/MediaType"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "items": {
-          "additionalProperties": true,
-          "type": "object"
-         },
          "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
          "title": "Response Progress By Library Api V1 Stats Progress By Library Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -2260,6 +2440,10 @@
       "type": "integer",
       "title": "Library Id"
      },
+     "media_type": {
+      "$ref": "#/components/schemas/MediaType",
+      "default": "video"
+     },
      "path": {
       "type": "string",
       "title": "Path"
@@ -2364,6 +2548,26 @@
      "started_at"
     ],
     "title": "ActiveJob"
+   },
+   "AudioCodec": {
+    "type": "string",
+    "enum": [
+     "opus",
+     "aac",
+     "mp3"
+    ],
+    "title": "AudioCodec"
+   },
+   "AudioContainer": {
+    "type": "string",
+    "enum": [
+     "opus",
+     "ogg",
+     "m4a",
+     "mp3"
+    ],
+    "title": "AudioContainer",
+    "description": "Conteneur de sortie d'une bibliothèque musique (= extension du fichier)."
    },
    "BitrateRuleIn": {
     "properties": {
@@ -3634,6 +3838,25 @@
       "$ref": "#/components/schemas/DvPolicy",
       "default": "convert_to_hdr10"
      },
+     "media_type": {
+      "$ref": "#/components/schemas/MediaType",
+      "default": "video"
+     },
+     "audio_codec": {
+      "$ref": "#/components/schemas/AudioCodec",
+      "default": "opus"
+     },
+     "audio_container": {
+      "$ref": "#/components/schemas/AudioContainer",
+      "default": "opus"
+     },
+     "audio_bitrate_kbps": {
+      "type": "integer",
+      "maximum": 512.0,
+      "minimum": 32.0,
+      "title": "Audio Bitrate Kbps",
+      "default": 128
+     },
      "date_filter_after": {
       "anyOf": [
        {
@@ -3652,10 +3875,17 @@
       "default": 0
      },
      "include_extensions": {
-      "items": {
-       "type": "string"
-      },
-      "type": "array",
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
       "title": "Include Extensions"
      },
      "exclude_globs": {
@@ -3740,6 +3970,19 @@
      "dv_policy": {
       "$ref": "#/components/schemas/DvPolicy"
      },
+     "media_type": {
+      "$ref": "#/components/schemas/MediaType"
+     },
+     "audio_codec": {
+      "$ref": "#/components/schemas/AudioCodec"
+     },
+     "audio_container": {
+      "$ref": "#/components/schemas/AudioContainer"
+     },
+     "audio_bitrate_kbps": {
+      "type": "integer",
+      "title": "Audio Bitrate Kbps"
+     },
      "date_filter_after": {
       "anyOf": [
        {
@@ -3818,6 +4061,10 @@
      "container",
      "hdr_policy",
      "dv_policy",
+     "media_type",
+     "audio_codec",
+     "audio_container",
+     "audio_bitrate_kbps",
      "date_filter_after",
      "priority",
      "include_extensions",
@@ -3915,6 +4162,39 @@
         "type": "null"
        }
       ]
+     },
+     "audio_codec": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AudioCodec"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "audio_container": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AudioContainer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "audio_bitrate_kbps": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 512.0,
+        "minimum": 32.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Audio Bitrate Kbps"
      },
      "date_filter_after": {
       "anyOf": [
@@ -4112,6 +4392,28 @@
        }
       ],
       "title": "Video Bitrate Kbps"
+     },
+     "audio_codec": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Audio Codec"
+     },
+     "audio_bitrate_kbps": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Audio Bitrate Kbps"
      },
      "is_hdr": {
       "anyOf": [
@@ -4442,6 +4744,28 @@
       ],
       "title": "Video Bitrate Kbps"
      },
+     "audio_codec": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Audio Codec"
+     },
+     "audio_bitrate_kbps": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Audio Bitrate Kbps"
+     },
      "is_hdr": {
       "anyOf": [
        {
@@ -4672,6 +4996,15 @@
      "ignored"
     ],
     "title": "MediaStatus"
+   },
+   "MediaType": {
+    "type": "string",
+    "enum": [
+     "video",
+     "music"
+    ],
+    "title": "MediaType",
+    "description": "Type de bibliothèque : vidéo (GPU) ou musique (CPU)."
    },
    "NoGainReviewRequest": {
     "properties": {

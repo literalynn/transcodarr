@@ -5,7 +5,8 @@
  *  Le sélecteur de période filtre toutes les statistiques d'ACTIVITÉ
  *  (tentatives, échecs, espace récupéré, débit, gain) — leurs titres
  *  l'indiquent. Les cartes d'ÉTAT (codecs, progression, fichiers restants,
- *  ressources) décrivent la bibliothèque actuelle. */
+ *  ressources) décrivent la bibliothèque actuelle. Le sélecteur de médias
+ *  (tout / vidéo / musique) filtre toutes les statistiques. */
 
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -36,6 +37,8 @@ import {
 import {
   fetchJson,
   type ActiveJob,
+  type MediaFilter,
+  type MediaType,
   type StatsPeriod,
   type ThroughputStats,
   type TimeUnit,
@@ -86,7 +89,7 @@ import { cn } from "@/lib/utils";
 import { useQueueSocket } from "@/ws/useQueueSocket";
 
 // ---------------------------------------------------------------------------
-// Période des statistiques (persistée par navigateur)
+// Filtres des statistiques : période et médias (persistés par navigateur)
 // ---------------------------------------------------------------------------
 const PERIODS: { value: StatsPeriod; label: string; tag: string }[] = [
   { value: 1, label: "24 h", tag: "24 dernières heures" },
@@ -129,11 +132,50 @@ function usePeriod(): [StatsPeriod, (p: StatsPeriod) => void] {
   return [period, update];
 }
 
-function PeriodSelector({ value, onChange }: { value: StatsPeriod; onChange: (p: StatsPeriod) => void }) {
+const MEDIA: { value: MediaFilter; label: string }[] = [
+  { value: null, label: "Tout" },
+  { value: "video", label: "Vidéo" },
+  { value: "music", label: "Musique" },
+];
+
+function useMedia(): [MediaFilter, (m: MediaFilter) => void] {
+  const [media, setMedia] = useState<MediaFilter>(() => {
+    try {
+      const raw = localStorage.getItem("stats-media");
+      return raw === "video" || raw === "music" ? raw : null;
+    } catch {
+      return null;
+    }
+  });
+  const update = (m: MediaFilter) => {
+    setMedia(m);
+    try {
+      localStorage.setItem("stats-media", m ?? "all");
+    } catch {
+      /* stockage indisponible : préférence non mémorisée */
+    }
+  };
+  return [media, update];
+}
+
+/** Filtres communs des cartes de statistiques. */
+type StatsFilter = { period: StatsPeriod; media: MediaFilter };
+
+function Segmented<T>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+}) {
   const t = useT();
   return (
-    <div className="inline-flex h-8 items-center rounded-md bg-muted p-0.5" role="radiogroup" aria-label={t("Période")}>
-      {PERIODS.map((p) => (
+    <div className="inline-flex h-8 items-center rounded-md bg-muted p-0.5" role="radiogroup" aria-label={label}>
+      {options.map((p) => (
         <button
           key={p.label}
           role="radio"
@@ -268,9 +310,9 @@ function ratio(value: number | null | undefined): string {
 // ---------------------------------------------------------------------------
 // Fiabilité : tentatives par jour + répartition
 // ---------------------------------------------------------------------------
-function ReliabilityCard({ period }: { period: StatsPeriod }) {
+function ReliabilityCard({ period, media }: StatsFilter) {
   const { t, lang } = useI18n();
-  const { data } = useReliability(period);
+  const { data } = useReliability(period, media);
   const unit: TimeUnit = data?.unit ?? "day";
   const counts = data?.counts;
   const attempts = data?.attempts ?? 0;
@@ -374,9 +416,9 @@ function ReliabilityCard({ period }: { period: StatsPeriod }) {
 // ---------------------------------------------------------------------------
 // Causes d'échec
 // ---------------------------------------------------------------------------
-function FailureCausesCard({ period }: { period: StatsPeriod }) {
+function FailureCausesCard({ period, media }: StatsFilter) {
   const t = useT();
-  const { data } = useFailures(period);
+  const { data } = useFailures(period, media);
   const retry = useRetryFailed();
   const [message, setMessage] = useState<string | null>(null);
   const categories = (data?.categories ?? []).filter((c) => c.jobs > 0 || c.failed_files > 0);
@@ -462,9 +504,9 @@ function FailureCausesCard({ period }: { period: StatsPeriod }) {
 // ---------------------------------------------------------------------------
 // Espace récupéré et débit (période)
 // ---------------------------------------------------------------------------
-function SavingsCard({ period }: { period: StatsPeriod }) {
+function SavingsCard({ period, media }: StatsFilter) {
   const { t, lang } = useI18n();
-  const { data } = useSavingsOverTime(period);
+  const { data } = useSavingsOverTime(period, media);
   const unit: TimeUnit = data?.unit ?? "day";
   const points = (data?.points ?? []).map((p) => ({ ...p, cumulative_gib: p.cumulative / GIB }));
   const empty = !data || data.total_bytes <= 0;
@@ -545,9 +587,17 @@ const THROUGHPUT_TITLES: Record<TimeUnit, string> = {
   week: "Débit d'encodage (fichiers/semaine)",
 };
 
-function ThroughputCard({ period }: { period: StatsPeriod }) {
+// Musique encodée sur CPU : « tout » mélange temps GPU et CPU
+const ENCODE_TIME: Record<MediaType | "all", { hours: string; label: string }> = {
+  video: { hours: "h GPU", label: "temps GPU" },
+  music: { hours: "h CPU", label: "temps CPU" },
+  all: { hours: "h d'encodage", label: "temps d'encodage" },
+};
+
+function ThroughputCard({ period, media }: StatsFilter) {
   const { t, lang } = useI18n();
-  const { data } = useThroughput(period);
+  const { data } = useThroughput(period, media);
+  const time = ENCODE_TIME[media ?? "all"];
   const unit: TimeUnit = data?.unit ?? "day";
   const empty = !data || data.files === 0;
 
@@ -563,7 +613,7 @@ function ThroughputCard({ period }: { period: StatsPeriod }) {
         !empty && (
           <span className="font-mono text-xs text-muted-foreground">
             <span className="text-sm font-semibold text-foreground">{data.files.toLocaleString()}</span>{" "}
-            {t("fichiers")} · {data.gpu_hours.toFixed(1)} h GPU
+            {t("fichiers")} · {data.gpu_hours.toFixed(1)} {t(time.hours)}
           </span>
         )
       }
@@ -591,7 +641,7 @@ function ThroughputCard({ period }: { period: StatsPeriod }) {
                     title={bucketLabel(point.t, unit, lang)}
                     rows={[
                       { label: t("fichiers"), value: point.files.toLocaleString(), color: CHART.series },
-                      { label: t("temps GPU"), value: `${point.gpu_hours.toFixed(1)} h` },
+                      { label: t(time.label), value: `${point.gpu_hours.toFixed(1)} h` },
                     ]}
                   />
                 );
@@ -612,11 +662,15 @@ function ThroughputCard({ period }: { period: StatsPeriod }) {
   );
 }
 
-function GainByBucketCard({ period }: { period: StatsPeriod }) {
+function GainByBucketCard({ period, media }: StatsFilter) {
   const t = useT();
-  const { data } = useGainByBucket(period);
+  const { data } = useGainByBucket(period, media);
+  const music = media === "music";
   const gainData = (data ?? []).map((g) => ({
-    name: `${g.resolution ?? "?"} ${(g.codec ?? "").toUpperCase()}`,
+    // Musique : « resolution » porte le codec source
+    name: music
+      ? `${codecName(g.resolution ?? "?")} → ${codecName(g.codec ?? "?")}`
+      : `${g.resolution ?? "?"} ${(g.codec ?? "").toUpperCase()}`,
     gain: g.avg_gain_percent ?? 0,
     count: g.count,
   }));
@@ -625,7 +679,7 @@ function GainByBucketCard({ period }: { period: StatsPeriod }) {
     <ChartCard
       title={
         <>
-          {t("Gain moyen par bucket et codec cible (%)")}
+          {t(music ? "Gain moyen par codec source (%)" : "Gain moyen par bucket et codec cible (%)")}
           <PeriodTag period={period} />
         </>
       }
@@ -680,6 +734,12 @@ const CODEC_SLOTS: { codec: string; color: string }[] = [
   { codec: "h264", color: CHART.cat3 },
 ];
 
+const AUDIO_CODEC_SLOTS: { codec: string; color: string }[] = [
+  { codec: "opus", color: CHART.cat1 },
+  { codec: "flac", color: CHART.cat2 },
+  { codec: "mp3", color: CHART.cat3 },
+];
+
 const CODEC_NAMES: Record<string, string> = {
   hevc: "HEVC",
   av1: "AV1",
@@ -690,6 +750,8 @@ const CODEC_NAMES: Record<string, string> = {
   prores: "ProRes",
   msmpeg4v3: "MS-MPEG4",
   vp9: "VP9",
+  opus: "Opus",
+  vorbis: "Vorbis",
 };
 
 function codecName(codec: string): string {
@@ -711,20 +773,21 @@ function sharePercent(value: number, total: number): string {
   return pct > 0 && pct < 0.1 ? "< 0.1 %" : formatPercent(pct);
 }
 
-function CodecsCard() {
+function CodecsCard({ media }: { media: MediaFilter }) {
   const t = useT();
-  const { data } = useCodecStats();
+  const { data } = useCodecStats(media);
+  const slots = media === "music" ? AUDIO_CODEC_SLOTS : CODEC_SLOTS;
   const current = data?.current ?? {};
   const total = Object.values(current).reduce((sum, n) => sum + n, 0);
 
-  const slices: CodecSlice[] = CODEC_SLOTS.filter((s) => (current[s.codec] ?? 0) > 0).map((s) => ({
+  const slices: CodecSlice[] = slots.filter((s) => (current[s.codec] ?? 0) > 0).map((s) => ({
     key: s.codec,
     label: codecName(s.codec),
     value: current[s.codec] ?? 0,
     color: s.color,
   }));
   const others = Object.entries(current)
-    .filter(([codec, n]) => n > 0 && !CODEC_SLOTS.some((s) => s.codec === codec))
+    .filter(([codec, n]) => n > 0 && !slots.some((s) => s.codec === codec))
     .map(([codec, value]) => ({ codec, value }))
     .sort((a, b) => b.value - a.value);
   if (others.length > 0) {
@@ -969,15 +1032,16 @@ function ResourcesCard() {
 export function Dashboard() {
   const t = useT();
   const [period, setPeriod] = usePeriod();
+  const [media, setMedia] = useMedia();
   const { active } = useQueueSocket();
-  const { data: summary } = useStatsSummary();
+  const { data: summary } = useStatsSummary(media);
   const { data: queue } = useQueueState();
   const { data: libraries } = useLibraries();
-  const { data: reliability } = useReliability(period);
-  const { data: savings } = useSavingsOverTime(period);
-  const { data: throughput } = useThroughput(period);
-  const { data: topRemaining } = useTopRemaining();
-  const { data: progress } = useLibraryProgress();
+  const { data: reliability } = useReliability(period, media);
+  const { data: savings } = useSavingsOverTime(period, media);
+  const { data: throughput } = useThroughput(period, media);
+  const { data: topRemaining } = useTopRemaining(media);
+  const { data: progress } = useLibraryProgress(media);
   const queueAction = useQueueAction();
   const scan = useTriggerScan();
   const [logJobId, setLogJobId] = useState<number | null>(null);
@@ -985,6 +1049,8 @@ export function Dashboard() {
 
   const paused = queue?.paused ?? false;
   const totalSlots = queue?.workers ?? 0;
+  // Les encodages musique (CPU) n'occupent pas de slot GPU
+  const musicJobs = active.filter((j) => j.media_type === "music").length;
 
   const failedNow = reliability?.files.failed_now ?? 0;
 
@@ -993,7 +1059,8 @@ export function Dashboard() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-bold">{t("Dashboard")}</h1>
         <div className="flex flex-wrap items-center gap-2">
-          <PeriodSelector value={period} onChange={setPeriod} />
+          <Segmented options={MEDIA} value={media} onChange={setMedia} label={t("Médias")} />
+          <Segmented options={PERIODS} value={period} onChange={setPeriod} label={t("Période")} />
           <Button
             variant={paused ? "default" : "secondary"}
             onClick={() => queueAction.mutate({ action: paused ? "resume" : "pause" })}
@@ -1019,7 +1086,8 @@ export function Dashboard() {
       <section>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {t("Jobs en cours")} ({active.length}/{totalSlots} {t("slots")})
+            {t("Jobs en cours")} ({active.length - musicJobs}/{totalSlots} {t("slots")}
+            {musicJobs > 0 && ` · ${musicJobs} ${t("musique")}`})
           </h2>
           <Link to="/queue" className="flex items-center gap-1 text-xs text-primary hover:underline">
             {queue?.waiting_count ?? 0} {t("en file d'attente")} <ArrowRight className="h-3 w-3" />
@@ -1086,16 +1154,16 @@ export function Dashboard() {
 
       {/* Fiabilité */}
       <section className="grid gap-4 lg:grid-cols-3">
-        <ReliabilityCard period={period} />
-        <FailureCausesCard period={period} />
+        <ReliabilityCard period={period} media={media} />
+        <FailureCausesCard period={period} media={media} />
       </section>
 
       {/* Économies et débit (période), répartition des codecs (état) */}
       <section className="grid gap-4 lg:grid-cols-2">
-        <SavingsCard period={period} />
-        <ThroughputCard period={period} />
-        <GainByBucketCard period={period} />
-        <CodecsCard />
+        <SavingsCard period={period} media={media} />
+        <ThroughputCard period={period} media={media} />
+        <GainByBucketCard period={period} media={media} />
+        <CodecsCard media={media} />
       </section>
 
       {/* Progression, restants, ressources */}

@@ -4,14 +4,15 @@
 
 **Never-destructive GPU transcoding for your Jellyfin library.**
 
-A self-hosted Tdarr alternative that re-encodes your media to HEVC or AV1 on Intel GPUs —
-and is built so that no code path can ever destroy or corrupt an original file.
+A self-hosted Tdarr alternative that re-encodes your videos to HEVC or AV1 on Intel GPUs,
+and your music to Opus, AAC or MP3 — and is built so that no code path can ever destroy or
+corrupt an original file.
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![Docker Compose](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)
 ![Intel QSV / VAAPI](https://img.shields.io/badge/GPU-Intel%20QSV%20%7C%20VAAPI-0071C5?logo=intel&logoColor=white)
-![HEVC / AV1](https://img.shields.io/badge/codecs-HEVC%20%7C%20AV1-555)
+![HEVC / AV1 / Opus](https://img.shields.io/badge/codecs-HEVC%20%7C%20AV1%20%7C%20Opus-555)
 
 [Features](#features) · [Quick start](#quick-start) · [Configuration](#configuration) · [Burn-in](#recommended-burn-in) · [Operations](#operations) · [FAQ](#faq)
 
@@ -52,6 +53,18 @@ Battle-tested on a single-server library of ~70k files.
   gain. Figures are kept for auditing; estimated "no gain" verdicts can be re-evaluated
   in one click.
 
+### Music
+
+- **Music libraries** — choose *video* or *music* when creating a library. A music library
+  has a single target: Opus (`.opus`/`.ogg`), AAC (`.m4a`) or MP3, at the bitrate you pick
+  (e.g. Opus 128 kbps). Encodes run on the CPU in their own workers (`audio_workers`,
+  0–4), so they never take a GPU slot.
+- Tags and cover art are kept (Ogg/Opus: as a `METADATA_BLOCK_PICTURE` comment). M4A keeps
+  standard iTunes tags only. Files with several audio tracks or a real video track are
+  skipped, and so are files already at or below the target bitrate.
+- Same safety net as video: 7 blocking checks (exit code, size, codec + marker, duration,
+  full decode, audio track + cover, size gain), atomic replacement, originals to the trash.
+
 ### HDR & Dolby Vision
 
 - Full **HDR10 / HDR10+ / HLG** handling, with optional tone-mapping to SDR per library.
@@ -84,8 +97,9 @@ Battle-tested on a single-server library of ~70k files.
 ### Web UI
 
 - React dashboard (dark theme, mobile-friendly, English/French) with live per-worker
-  progress, and stats over 24 h / 7 d / 30 d / all: success rate, failure causes, space
-  saved, throughput, gain per resolution bucket, library codec split.
+  progress, and stats over 24 h / 7 d / 30 d / all, for video, music or both: success
+  rate, failure causes, space saved, throughput, gain per resolution bucket (per source
+  codec for music), library codec split.
 - Queue with drag-to-reorder, filterable history of every attempt, failures view with
   bulk retry.
 - Per-job diagnostics: cause and remedy, pre-flight result, track plan, validation
@@ -99,8 +113,8 @@ Battle-tested on a single-server library of ~70k files.
 flowchart LR
     A[Scan<br/>library] --> B{Pre-flight}
     B -- below target /<br/>unreadable --> S[Skip]
-    B -- ok --> C[GPU encode<br/>next to source]
-    C --> D{9 validation<br/>checks}
+    B -- ok --> C[Encode next to source<br/>GPU · CPU for music]
+    C --> D{Validation checks<br/>9 video · 7 music}
     D -- fail --> R[Retry with a more<br/>robust strategy]
     R --> C
     D -- pass --> E{Dry-run?}
@@ -257,6 +271,9 @@ confirmation) — your media libraries are never touched.
   configured) → file birth time → mtime. `ctime` is never used (any chown/chmod rewrites
   it). Jellyfin keeps the original `DateCreated` across quality upgrades: if you want
   upgrades re-encoded, rely on mtime and leave the Jellyfin integration off.
+- **Music and Lidarr** — re-encoding a FLAC to Opus changes its extension
+  (`.flac` → `.opus`): Lidarr and Jellyfin see a new file on their next rescan. Turn off
+  upgrades in the Lidarr quality profile, or it may download the FLAC again.
 - **MP4 output** is supported but lossy by nature (no font attachments, text subs become
   mov_text, image subs fail explicitly). MKV is the default for a reason.
 

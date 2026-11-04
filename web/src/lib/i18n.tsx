@@ -101,6 +101,11 @@ const EN: Record<string, string> = {
   "Débit d'encodage (fichiers/heure)": "Encoding throughput (files/hour)",
   "Débit d'encodage (fichiers/semaine)": "Encoding throughput (files/week)",
   "temps GPU": "GPU time",
+  "temps CPU": "CPU time",
+  "temps d'encodage": "encoding time",
+  "h d'encodage": "h encoding",
+  "Médias": "Media",
+  "musique": "music",
   "24 dernières heures": "last 24 hours",
   "7 derniers jours": "last 7 days",
   "30 derniers jours": "last 30 days",
@@ -126,6 +131,7 @@ const EN: Record<string, string> = {
     "Codec distribution (current library)",
   "Gain moyen par bucket et codec cible (%)":
     "Average gain by bucket and target codec (%)",
+  "Gain moyen par codec source (%)": "Average gain by source codec (%)",
   "Débit d'encodage (fichiers/jour)": "Encoding throughput (files/day)",
   "Progression par bibliothèque (fichiers conformes)":
     "Progress by library (conforming files)",
@@ -180,6 +186,14 @@ const EN: Record<string, string> = {
   "Nouvelle bibliothèque": "New library",
   "Nom": "Name",
   "Chemin (validé côté serveur)": "Path (validated server-side)",
+  "Vidéo": "Video",
+  "Musique": "Music",
+  "Codec audio cible": "Target audio codec",
+  "Débit cible (kbps)": "Target bitrate (kbps)",
+  "M4A : les tags non standard (MusicBrainz, etc.) ne sont pas conservés.":
+    "M4A: non-standard tags (MusicBrainz, etc.) are not kept.",
+  "Changer la cible remet en file les fichiers déjà réencodés.":
+    "Changing the target re-queues files that were already re-encoded.",
   "Créer": "Create",
   "création impossible": "creation failed",
   // GPU & Réglages
@@ -203,6 +217,7 @@ const EN: Record<string, string> = {
   "Importer": "Import",
   "Dry-run global (aucun remplacement)": "Global dry-run (no replacement)",
   "Concurrence max": "Max concurrency",
+  "Encodages musique simultanés (CPU, 0 à 4)": "Concurrent music encodes (CPU, 0 to 4)",
   "Espace disque minimal (Go)": "Minimum free disk (GB)",
   "Stratégie tmp": "Tmp strategy",
   "Dossier temporaire": "Temp directory",

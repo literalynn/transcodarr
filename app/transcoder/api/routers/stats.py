@@ -2,6 +2,7 @@
 
 Les statistiques d'activité (tentatives, échecs, espace récupéré, débit,
 gain par bucket) acceptent une période `days` (absente = depuis toujours).
+Toutes acceptent `media_type` (video/music, absent = toutes les bibliothèques).
 Les périodes sont alignées sur l'heure (24 h) ou le jour UTC, et les
 courbes renvoient TOUS les créneaux de la période, vides compris : l'axe
 du temps reste régulier et les cartes du dashboard concordent."""
@@ -9,7 +10,7 @@ du temps reste régulier et les cartes du dashboard concordent."""
 from __future__ import annotations
 
 import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Numeric, case, cast, func, or_, select
@@ -20,9 +21,10 @@ from transcoder.api.deps import get_queue_manager
 from transcoder.core.queue import QueueManager
 from transcoder.core.resources import sample_resources
 from transcoder.db import get_db
-from transcoder.enums import JobState, MediaStatus
+from transcoder.enums import JobState, MediaStatus, MediaType
 from transcoder.models import Gpu as GpuModel
 from transcoder.models import Job, Library, MediaFile
+from transcoder.runtime_config import load_runtime_config
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -39,6 +41,9 @@ _STEPS: dict[str, datetime.timedelta] = {
 _MAX_DAILY_SPAN_DAYS = 92
 # Période en jours acceptée par les endpoints (absente = depuis toujours)
 _DAYS_QUERY = Query(default=None, ge=1, le=3650)
+# Type de bibliothèque (absent = toutes). Annotated : défaut Python None,
+# les endpoints restent appelables directement (tests)
+_MediaQuery = Annotated[MediaType | None, Query()]
 
 
 def _now() -> datetime.datetime:
@@ -118,6 +123,13 @@ def _period_conditions(days: int | None) -> list[Any]:
     return [Job.finished_at >= since] if since is not None else [Job.finished_at.is_not(None)]
 
 
+def _media_conditions(column: Any, media_type: MediaType | None) -> list[Any]:
+    """Filtre par type de bibliothèque d'une colonne library_id (None = toutes)."""
+    if media_type is None:
+        return []
+    return [column.in_(select(Library.id).where(Library.media_type == media_type))]
+
+
 @router.get("/resources")
 async def resources(session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """CPU/RAM/GPU : consommation de l'app (cgroup) vs reste du système."""
@@ -132,12 +144,17 @@ async def resources(session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
 async def summary(
     session: AsyncSession = Depends(get_db),
     qm: QueueManager = Depends(get_queue_manager),
+    media_type: _MediaQuery = None,
 ) -> dict[str, Any]:
     """KPIs du dashboard : traités/total, Go récupérés, gain moyen, débit, ETA."""
-    total_files = (await session.scalar(select(func.count()).select_from(MediaFile))) or 0
+    files = _media_conditions(MediaFile.library_id, media_type)
+    jobs = _media_conditions(Job.library_id, media_type)
+    total_files = (
+        await session.scalar(select(func.count()).select_from(MediaFile).where(*files))
+    ) or 0
     by_status_rows = (
         await session.execute(
-            select(MediaFile.status, func.count()).group_by(MediaFile.status)
+            select(MediaFile.status, func.count()).where(*files).group_by(MediaFile.status)
         )
     ).all()
     by_status = {status.value: count for status, count in by_status_rows}
@@ -146,12 +163,12 @@ async def summary(
     bytes_saved = (
         await session.scalar(
             select(func.coalesce(func.sum(Job.bytes_saved), 0)).where(
-                Job.state == JobState.SUCCESS, Job.dry_run.is_(False)
+                Job.state == JobState.SUCCESS, Job.dry_run.is_(False), *jobs
             )
         )
     ) or 0
     avg_gain = await session.scalar(
-        select(func.avg(Job.gain_percent)).where(Job.state == JobState.SUCCESS)
+        select(func.avg(Job.gain_percent)).where(Job.state == JobState.SUCCESS, *jobs)
     )
 
     day_ago = _now() - datetime.timedelta(hours=24)
@@ -159,7 +176,7 @@ async def summary(
         await session.scalar(
             select(func.count())
             .select_from(Job)
-            .where(Job.state == JobState.SUCCESS, Job.finished_at >= day_ago)
+            .where(Job.state == JobState.SUCCESS, Job.finished_at >= day_ago, *jobs)
         )
     ) or 0
     # Durée moyenne des 50 derniers encodages réels (réussis ou sans gain),
@@ -170,6 +187,7 @@ async def summary(
             Job.state.in_((JobState.SUCCESS, JobState.SKIPPED_NO_GAIN)),
             Job.duration_s > 0,
             Job.finished_at.is_not(None),
+            *jobs,
         )
         .order_by(Job.finished_at.desc())
         .limit(50)
@@ -179,8 +197,12 @@ async def summary(
     queued = by_status.get(MediaStatus.QUEUED.value, 0)
     eta_s: float | None = None
     if avg_job_s and queued:
-        # Les workers encodent en parallèle
-        eta_s = float(avg_job_s) * queued / max(1, qm.worker_count())
+        # Les workers encodent en parallèle (musique : pool CPU dédié)
+        if media_type is MediaType.MUSIC:
+            workers = (await load_runtime_config(session)).audio_workers
+        else:
+            workers = qm.worker_count()
+        eta_s = float(avg_job_s) * queued / max(1, workers)
 
     dry_run_libs = (
         await session.execute(select(Library.id, Library.name, Library.dry_run))
@@ -204,6 +226,7 @@ async def summary(
 async def savings_over_time(
     session: AsyncSession = Depends(get_db),
     days: int | None = _DAYS_QUERY,
+    media_type: _MediaQuery = None,
 ) -> dict[str, Any]:
     """Espace récupéré par créneau et cumulé sur la période (§7.4)."""
     conditions = [
@@ -211,6 +234,7 @@ async def savings_over_time(
         Job.dry_run.is_(False),
         Job.bytes_saved.is_not(None),
         *_period_conditions(days),
+        *_media_conditions(Job.library_id, media_type),
     ]
     unit, buckets = await _timeline(session, days, conditions)
     bucket = _bucket_expr(unit)
@@ -241,19 +265,31 @@ async def savings_over_time(
 
 
 @router.get("/codecs")
-async def codecs(session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    """Répartition des codecs avant/après (donut §7.4)."""
+async def codecs(
+    session: AsyncSession = Depends(get_db),
+    media_type: _MediaQuery = None,
+) -> dict[str, Any]:
+    """Répartition des codecs avant/après (donut §7.4) : codec vidéo, ou
+    codec audio pour les bibliothèques musique."""
+    codec_col: Any = MediaFile.audio_codec if media_type is MediaType.MUSIC else MediaFile.video_codec
+    if media_type is None:
+        # Toutes bibliothèques : codec vidéo, à défaut codec audio (fichiers musique)
+        codec_col = func.coalesce(MediaFile.video_codec, MediaFile.audio_codec)
     current_rows = (
         await session.execute(
-            select(MediaFile.video_codec, func.count())
-            .where(MediaFile.video_codec.is_not(None))
-            .group_by(MediaFile.video_codec)
+            select(codec_col, func.count())
+            .where(codec_col.is_not(None), *_media_conditions(MediaFile.library_id, media_type))
+            .group_by(codec_col)
         )
     ).all()
     before_rows = (
         await session.execute(
             select(Job.src_codec, func.count())
-            .where(Job.state == JobState.SUCCESS, Job.src_codec.is_not(None))
+            .where(
+                Job.state == JobState.SUCCESS,
+                Job.src_codec.is_not(None),
+                *_media_conditions(Job.library_id, media_type),
+            )
             .group_by(Job.src_codec)
         )
     ).all()
@@ -267,19 +303,42 @@ async def codecs(session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
 async def gain_by_bucket(
     session: AsyncSession = Depends(get_db),
     days: int | None = _DAYS_QUERY,
+    media_type: _MediaQuery = None,
 ) -> list[dict[str, Any]]:
     """Gain moyen par BUCKET de résolution — pas par résolution brute : un
     1920x804 cinémascope est du 1080p, sinon chaque crop créerait son
-    propre groupe d'un seul fichier."""
+    propre groupe d'un seul fichier. Musique : par codec SOURCE (la
+    « resolution » porte alors le codec d'origine)."""
     from transcoder.core.buckets import bucket_for_height
+
+    conditions = [
+        Job.state == JobState.SUCCESS,
+        Job.gain_percent.is_not(None),
+        *_period_conditions(days),
+        *_media_conditions(Job.library_id, media_type),
+    ]
+    if media_type is MediaType.MUSIC:
+        music_rows = (
+            await session.execute(
+                select(Job.src_codec, Job.dst_codec, func.avg(Job.gain_percent), func.count())
+                .where(*conditions)
+                .group_by(Job.src_codec, Job.dst_codec)
+                .order_by(func.count().desc())
+            )
+        ).all()
+        return [
+            {
+                "resolution": src,
+                "codec": dst,
+                "avg_gain_percent": round(float(gain), 2),
+                "count": count,
+            }
+            for src, dst, gain, count in music_rows
+        ]
 
     rows = (
         await session.execute(
-            select(Job.src_resolution, Job.dst_codec, Job.gain_percent).where(
-                Job.state == JobState.SUCCESS,
-                Job.gain_percent.is_not(None),
-                *_period_conditions(days),
-            )
+            select(Job.src_resolution, Job.dst_codec, Job.gain_percent).where(*conditions)
         )
     ).all()
     agg: dict[tuple[str, str], tuple[float, int]] = {}
@@ -311,9 +370,14 @@ async def gain_by_bucket(
 async def throughput(
     session: AsyncSession = Depends(get_db),
     days: int | None = _DAYS_QUERY,
+    media_type: _MediaQuery = None,
 ) -> dict[str, Any]:
     """Fichiers réencodés avec succès par créneau, temps GPU et débit moyen."""
-    conditions = [Job.state == JobState.SUCCESS, *_period_conditions(days)]
+    conditions = [
+        Job.state == JobState.SUCCESS,
+        *_period_conditions(days),
+        *_media_conditions(Job.library_id, media_type),
+    ]
     unit, buckets = await _timeline(session, days, conditions)
     bucket = _bucket_expr(unit)
     rows = (
@@ -371,12 +435,16 @@ async def throughput(
 async def top_remaining(
     session: AsyncSession = Depends(get_db),
     limit: int = Query(default=20, ge=1, le=100),
+    media_type: _MediaQuery = None,
 ) -> list[dict[str, Any]]:
     """Top des fichiers les plus lourds encore non traités (§7.4)."""
     rows = (
         await session.execute(
             select(MediaFile)
-            .where(MediaFile.status.in_((MediaStatus.PENDING, MediaStatus.QUEUED)))
+            .where(
+                MediaFile.status.in_((MediaStatus.PENDING, MediaStatus.QUEUED)),
+                *_media_conditions(MediaFile.library_id, media_type),
+            )
             .order_by(MediaFile.size_bytes.desc().nulls_last())
             .limit(limit)
         )
@@ -400,9 +468,11 @@ async def top_remaining(
 async def failures(
     session: AsyncSession = Depends(get_db),
     days: int | None = _DAYS_QUERY,
+    media_type: _MediaQuery = None,
 ) -> dict[str, Any]:
     """Échecs par catégorie : tentatives (période) et fichiers en échec définitif."""
-    job_filter = _period_conditions(days)
+    job_filter = [*_period_conditions(days), *_media_conditions(Job.library_id, media_type)]
+    file_filter = _media_conditions(MediaFile.library_id, media_type)
     total_jobs = (
         await session.scalar(select(func.count()).select_from(Job).where(*job_filter))
     ) or 0
@@ -431,7 +501,7 @@ async def failures(
         for category, count in (
             await session.execute(
                 select(MediaFile.failure_category, func.count())
-                .where(MediaFile.status == MediaStatus.FAILED)
+                .where(MediaFile.status == MediaStatus.FAILED, *file_filter)
                 .group_by(MediaFile.failure_category)
             )
         ).all()
@@ -480,12 +550,14 @@ async def failures(
 async def reliability(
     session: AsyncSession = Depends(get_db),
     days: int | None = _DAYS_QUERY,
+    media_type: _MediaQuery = None,
 ) -> dict[str, Any]:
     """Fiabilité : tentatives vs réussites, premier essai, replis, temps perdu.
 
     « Tentative » = job ayant réellement lancé un encodage (les évaluations
     du pré-vol, sans GPU, sont comptées à part)."""
-    job_filter = _period_conditions(days)
+    job_filter = [*_period_conditions(days), *_media_conditions(Job.library_id, media_type)]
+    file_filter = _media_conditions(MediaFile.library_id, media_type)
     preflight = Job.strategy == "preflight"
     # Expressions réutilisées À L'IDENTIQUE dans SELECT et GROUP BY
     is_preflight = func.coalesce(preflight, False)
@@ -554,14 +626,16 @@ async def reliability(
         await session.scalar(
             select(func.count())
             .select_from(MediaFile)
-            .where(MediaFile.status == MediaStatus.FAILED)
+            .where(MediaFile.status == MediaStatus.FAILED, *file_filter)
         )
     ) or 0
     retrying_now = (
         await session.scalar(
             select(func.count())
             .select_from(MediaFile)
-            .where(MediaFile.status == MediaStatus.QUEUED, MediaFile.attempt_count > 0)
+            .where(
+                MediaFile.status == MediaStatus.QUEUED, MediaFile.attempt_count > 0, *file_filter
+            )
         )
     ) or 0
     predicted_no_gain = (
@@ -571,6 +645,7 @@ async def reliability(
             .where(
                 MediaFile.status == MediaStatus.SKIPPED_NO_GAIN,
                 MediaFile.last_error.like("gain prévu insuffisant%"),
+                *file_filter,
             )
         )
     ) or 0
@@ -641,7 +716,10 @@ async def reliability(
 
 
 @router.get("/progress-by-library")
-async def progress_by_library(session: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
+async def progress_by_library(
+    session: AsyncSession = Depends(get_db),
+    media_type: _MediaQuery = None,
+) -> list[dict[str, Any]]:
     """% de fichiers conformes (bon codec ET bon bitrate) par bibliothèque."""
     conform = func.sum(
         case((MediaFile.status.in_(_PROCESSED), 1), else_=0)
@@ -655,6 +733,7 @@ async def progress_by_library(session: AsyncSession = Depends(get_db)) -> list[d
                 cast(conform, Numeric),
             )
             .join(MediaFile, MediaFile.library_id == Library.id, isouter=True)
+            .where(*([Library.media_type == media_type] if media_type is not None else []))
             .group_by(Library.id, Library.name)
             .order_by(Library.id)
         )
