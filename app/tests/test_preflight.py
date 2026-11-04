@@ -137,6 +137,20 @@ def test_audio_and_subtitle_component_errors_are_ignored() -> None:
     assert significant_decode_errors(stderr) == []
 
 
+def test_music_ignores_cover_errors_only() -> None:
+    """Messages RÉELS (prod, 15 musiques refusées à tort) : la pochette abîmée de
+    la source est décodée pendant l'analyse, même avec ``-map 0:a:0``."""
+    cover = (
+        "[mjpeg @ 0x5606d6f6dd80] unable to decode APP fields: Invalid data found when "
+        "processing input\n"
+        "[mjpeg @ 0x1] No JPEG data found in image\n"
+        "[png @ 0x2] Invalid PNG signature 0xFFD8FFE000104A46.\n"
+    )
+    assert significant_decode_errors(cover, audio=True) == []
+    audio_error = "[aist#0:0/opus @ 0x3] [dec:opus @ 0x4] Error submitting packet to decoder\n"
+    assert significant_decode_errors(cover + audio_error, audio=True) == [audio_error.strip()]
+
+
 def test_video_component_errors_are_kept() -> None:
     stderr = (
         "[hevc @ 0x55a0] Invalid NAL unit size (0 > 1234).\n"

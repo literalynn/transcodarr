@@ -200,6 +200,12 @@ def _is_non_video(component: str | None) -> bool:
     return component in _NON_VIDEO_COMPONENTS
 
 
+# Pochette d'un fichier musical : FFmpeg la décode pour analyser le fichier, même
+# avec -map 0:a:0. Ses erreurs (JPEG/PNG abîmé, déjà dans la source) ne touchent
+# pas l'audio — constaté en production : « [mjpeg] unable to decode APP fields »
+_COVER_DECODERS = frozenset({"mjpeg", "png", "bmp", "gif", "webp", "tiff", "jpeg2000"})
+
+
 def significant_decode_errors(
     stderr: str, *, after_seek: bool = False, audio: bool = False
 ) -> list[str]:
@@ -208,14 +214,18 @@ def significant_decode_errors(
     Écarte le bruit du muxer null, les messages émis par des composants
     audio/sous-titres (pistes copiées, erreurs préexistantes dans la source)
     et, après un seek, les artefacts normaux de démarrage en milieu de GOP.
-    ``audio=True`` : fichier musical, dont l'audio est la piste réencodée."""
+    ``audio=True`` : fichier musical, dont l'audio est la piste réencodée ;
+    seuls les messages des décodeurs de pochette sont écartés."""
     benign = _BENIGN_DECODE + (_BENIGN_AFTER_SEEK if after_seek else ())
+
+    def foreign(line: str) -> bool:
+        component = _component(line)
+        return component in _COVER_DECODERS if audio else _is_non_video(component)
+
     return [
         ln
         for ln in (line.strip() for line in stderr.splitlines())
-        if ln
-        and not any(b in ln for b in benign)
-        and (audio or not _is_non_video(_component(ln)))
+        if ln and not any(b in ln for b in benign) and not foreign(ln)
     ]
 
 

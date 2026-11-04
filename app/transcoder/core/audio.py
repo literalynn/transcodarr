@@ -68,6 +68,11 @@ MAX_KBPS: dict[AudioCodec, int] = {
 
 _OGG = (AudioContainer.OPUS, AudioContainer.OGG)
 
+# Au-delà de 2 canaux, libopus n'accepte que la disposition Vorbis et FFmpeg ne
+# convertit pas seul : un FLAC 5 canaux, lu en 5.0(side), échouait en EINVAL.
+# Conversion explicite vers la disposition Vorbis du même nombre de canaux.
+_OPUS_LAYOUTS: dict[int, str] = {3: "3.0", 4: "quad", 5: "5.0", 6: "5.1", 7: "6.1", 8: "7.1"}
+
 COVER_MIME: dict[str, str] = {
     "mjpeg": "image/jpeg",
     "png": "image/png",
@@ -223,11 +228,13 @@ def build_audio_cmd(
     cover_index: int | None,
     metadata_path: str | None,
     src_sample_rate: int | None,
+    src_channels: int | None,
 ) -> list[str]:
     """Commande d'encodage d'un fichier musical (pure).
 
     ``cover_index`` : pochette à copier comme flux (MP3/M4A) ;
-    ``metadata_path`` : fichier ffmetadata (pochette Ogg en METADATA_BLOCK_PICTURE)."""
+    ``metadata_path`` : fichier ffmetadata (pochette Ogg en METADATA_BLOCK_PICTURE) ;
+    ``src_channels`` : canaux de la source (disposition Vorbis imposée en Opus)."""
     cmd = [
         ffmpeg_path, "-hide_banner", "-nostdin", "-y",
         *input_flags(strategy, input_format),
@@ -244,6 +251,8 @@ def build_audio_cmd(
     if metadata_path is not None:
         cmd += ["-map_metadata", "1"]
     cmd += ["-c:a", ENCODERS[target.codec], "-b:a", f"{target.bitrate_kbps}k"]
+    if target.codec is AudioCodec.OPUS and (layout := _OPUS_LAYOUTS.get(src_channels or 0)):
+        cmd += ["-af", f"aformat=channel_layouts={layout}"]
     if target.codec is not AudioCodec.OPUS and src_sample_rate and src_sample_rate > 48000:
         # Hi-res 88,2/96/192 kHz : inaudible à 128 kbps, et hors MP3
         cmd += ["-ar", "48000"]

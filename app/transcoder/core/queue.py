@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from transcoder import TOOL_ID
@@ -1405,6 +1405,7 @@ class QueueManager:
             cover_index=int(cover["index"]) if cover is not None else None,
             metadata_path=metadata_path,
             src_sample_rate=sample_rate(probe.raw),
+            src_channels=probe.audio_streams[0].get("channels"),  # une seule piste (skip_reason)
         )
         log_path = os.path.join(config.log_dir, f"job_{work.job_id}.log")
         diagnostics: dict[str, Any] = {
@@ -1903,6 +1904,15 @@ class QueueManager:
                     "Extension changée : %s → %s (Jellyfin devra rescanner)",
                     mf.path,
                     replace_result.final_path,
+                )
+                # Le remplacement refuse d'écraser un fichier : une fiche au chemin
+                # final décrit donc un fichier disparu (un .opus remplacé par un
+                # nouveau FLAC de Lidarr avant le scan). Sans ce ménage, la contrainte
+                # d'unicité annulait le job alors que le fichier était déjà remplacé.
+                await session.execute(
+                    delete(MediaFile).where(
+                        MediaFile.path == replace_result.final_path, MediaFile.id != mf.id
+                    )
                 )
             mf.path = replace_result.final_path
             mf.status = MediaStatus.DONE

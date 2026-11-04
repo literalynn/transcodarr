@@ -26,11 +26,15 @@
     --input: 220 13% 85%;
     --ring: 217 91% 55%;
     /* Graphiques — palette validée (daltonisme, contraste) pour chaque thème.
-       Séries catégorielles 1→3 dans cet ordre (bleu, orange, aqua : paires
-       toutes distinguables) ; issues : vert réussi / gris neutre / rouge échec. */
+       Séries catégorielles 1→6 dans cet ordre (bleu, orange, aqua, jaune,
+       magenta, vert : paires voisines distinguables, 1→3 toutes entre elles) ;
+       issues : vert réussi / gris neutre / rouge échec. */
     --chart-1: 213 67% 50%;
     --chart-2: 17 82% 56%;
     --chart-3: 159 73% 40%;
+    --chart-4: 40.8 100% 46.5%;
+    --chart-5: 337.4 70.3% 69.6%;
+    --chart-6: 120 100% 25.7%;
     --chart-good: 120 86% 34%;
     --chart-neutral: 222 7% 66%;
     --chart-bad: 0 61% 52%;
@@ -60,6 +64,9 @@
     --chart-1: 213 76% 56%;
     --chart-2: 17 70% 50%;
     --chart-3: 159 73% 36%;
+    --chart-4: 39.7 100% 39.4%;
+    --chart-5: 338.2 61.1% 57.6%;
+    --chart-6: 120 100% 25.7%;
     --chart-good: 120 86% 34%;
     --chart-neutral: 223 7% 51%;
     --chart-bad: 0 61% 52%;

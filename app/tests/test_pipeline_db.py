@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from transcoder.config import get_settings
+from transcoder.runtime_config import RuntimeConfig
 
 def _find_tool(binary: str) -> str | None:
     """Cherche dans le PATH puis à l'emplacement jellyfin-ffmpeg (conteneur)."""
@@ -73,43 +74,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def test_claim_process_validate_replace(tmp_path: Path) -> None:
-    from sqlalchemy import select
-
-    from transcoder.core.capabilities import Capabilities, EncoderTest, GpuCapability
-    from transcoder.core.cmd_builder import BuildParams, input_flags, stream_mapping_args
-    from transcoder.core.dovi import DvCapabilities
-    from transcoder.core.queue import QueueManager
-    from transcoder.core.rules import build_transcoder_tag
-    from transcoder.core.scanner import scan_library
-    from transcoder.db import dispose_engine, session_scope
-    from transcoder.enums import Codec, GpuApi, JobState, MediaStatus
-    from transcoder.models import BitrateRule, Gpu, Job, Library, MediaFile
-    from transcoder.runtime_config import RuntimeConfig
-    from transcoder.seed_data import SEED_BITRATES, default_bufsize_kbps, default_max_kbps
-    import transcoder.core.queue as queue_module
-
+def _runtime_config(tmp_path: Path) -> RuntimeConfig:
     assert FFMPEG is not None and FFPROBE is not None
-    marker = uuid.uuid4().hex[:8]
-
-    # --- Source : mire haut bitrate + audio, mtime ancien -------------------
-    media_dir = tmp_path / "Films"
-    media_dir.mkdir()
-    src = media_dir / "film.mkv"
-    subprocess.run(
-        [
-            FFMPEG, "-hide_banner", "-nostdin", "-y", "-v", "error",
-            "-f", "lavfi", "-i", "testsrc2=duration=6:size=640x360:rate=25",
-            "-f", "lavfi", "-i", "sine=duration=6",
-            "-c:v", "libx264", "-b:v", "2500k", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", str(src),
-        ],
-        check=True,
-    )
-    os.utime(src, (1_600_000_000, 1_500_000_000))
-    original_size = src.stat().st_size
-
-    config = RuntimeConfig(
+    return RuntimeConfig(
         ffmpeg_path=FFMPEG,
         ffprobe_path=FFPROBE,
         dovi_tool_path="/nonexistent",
@@ -138,6 +105,44 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
         jellyfin_url=None,
         jellyfin_api_key=None,
     )
+
+
+async def test_claim_process_validate_replace(tmp_path: Path) -> None:
+    from sqlalchemy import select
+
+    from transcoder.core.capabilities import Capabilities, EncoderTest, GpuCapability
+    from transcoder.core.cmd_builder import BuildParams, input_flags, stream_mapping_args
+    from transcoder.core.dovi import DvCapabilities
+    from transcoder.core.queue import QueueManager
+    from transcoder.core.rules import build_transcoder_tag
+    from transcoder.core.scanner import scan_library
+    from transcoder.db import dispose_engine, session_scope
+    from transcoder.enums import Codec, GpuApi, JobState, MediaStatus
+    from transcoder.models import BitrateRule, Gpu, Job, Library, MediaFile
+    from transcoder.seed_data import SEED_BITRATES, default_bufsize_kbps, default_max_kbps
+    import transcoder.core.queue as queue_module
+
+    assert FFMPEG is not None and FFPROBE is not None
+    marker = uuid.uuid4().hex[:8]
+
+    # --- Source : mire haut bitrate + audio, mtime ancien -------------------
+    media_dir = tmp_path / "Films"
+    media_dir.mkdir()
+    src = media_dir / "film.mkv"
+    subprocess.run(
+        [
+            FFMPEG, "-hide_banner", "-nostdin", "-y", "-v", "error",
+            "-f", "lavfi", "-i", "testsrc2=duration=6:size=640x360:rate=25",
+            "-f", "lavfi", "-i", "sine=duration=6",
+            "-c:v", "libx264", "-b:v", "2500k", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", str(src),
+        ],
+        check=True,
+    )
+    os.utime(src, (1_600_000_000, 1_500_000_000))
+    original_size = src.stat().st_size
+
+    config = _runtime_config(tmp_path)
 
     # --- Bibliothèque + règles en base --------------------------------------
     async with session_scope() as session:
@@ -313,4 +318,105 @@ async def test_claim_process_validate_replace(tmp_path: Path) -> None:
             gpu_obj = await session.get(Gpu, gpu_id)
             if gpu_obj is not None:
                 await session.delete(gpu_obj)
+        await dispose_engine()
+
+
+async def test_music_final_path_held_by_stale_row(tmp_path: Path) -> None:
+    """FLAC → Opus alors qu'une fiche périmée occupe déjà le chemin .opus (prod,
+    10/30 : .opus remplacé par un nouveau FLAC de Lidarr avant le scan). Le job
+    était annulé par la contrainte d'unicité alors que le fichier était remplacé."""
+    from sqlalchemy import select
+
+    from transcoder.core.audio import MUSIC_EXTENSIONS
+    from transcoder.core.capabilities import Capabilities
+    from transcoder.core.dovi import DvCapabilities
+    from transcoder.core.queue import QueueManager
+    from transcoder.core.scanner import scan_library
+    from transcoder.db import dispose_engine, session_scope
+    from transcoder.enums import AudioCodec, AudioContainer, JobState, MediaStatus, MediaType
+    from transcoder.models import Job, Library, MediaFile
+
+    assert FFMPEG is not None
+    root = tmp_path / "Musique"
+    (root / "Album").mkdir(parents=True)
+    src = root / "Album" / "01.flac"
+    final = src.with_suffix(".opus")
+    subprocess.run(
+        [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=6:c=pink:r=44100:a=0.5",
+         "-ac", "2", "-c:a", "flac", str(src)],
+        check=True,
+    )
+    os.utime(src, (1_600_000_000, 1_500_000_000))
+    config = _runtime_config(tmp_path)
+
+    async with session_scope() as session:
+        lib = Library(
+            name=f"music-test-{uuid.uuid4().hex[:8]}",
+            path=str(root),
+            priority=10_000,
+            scan_cron=None,
+            dry_run=False,
+            media_type=MediaType.MUSIC,
+            audio_codec=AudioCodec.OPUS,
+            audio_container=AudioContainer.OPUS,
+            audio_bitrate_kbps=128,
+            include_extensions=list(MUSIC_EXTENSIONS),
+        )
+        session.add(lib)
+        await session.flush()
+        lib_id = lib.id
+
+    try:
+        async with session_scope() as session:
+            lib_obj = await session.get(Library, lib_id)
+            assert lib_obj is not None
+            result = await scan_library(
+                session,
+                lib_obj,
+                config=config,
+                dv_caps=DvCapabilities(libplacebo_dv=False, libplacebo=False),
+            )
+            assert result.queued == 1, result.as_dict()
+        async with session_scope() as session:
+            mf = (
+                await session.execute(select(MediaFile).where(MediaFile.library_id == lib_id))
+            ).scalar_one()
+            mf.manual_rank = 0
+            media_id = mf.id
+            stale = MediaFile(library_id=lib_id, path=str(final), status=MediaStatus.DONE)
+            session.add(stale)
+            await session.flush()
+            stale_id = stale.id
+
+        qm = QueueManager(
+            Capabilities(
+                ffmpeg_ok=True,
+                ffmpeg_version="test",
+                ffprobe_ok=True,
+                libplacebo=False,
+                libplacebo_dv=False,
+                dovi_tool_ok=False,
+                mkvpropedit_ok=False,
+                gpus=[],
+            )
+        )
+        work = await qm._claim([], MediaType.MUSIC)
+        assert work is not None and work.media_id == media_id
+        await qm._process_audio(work, 0, config)
+
+        async with session_scope() as session:
+            job = (
+                await session.execute(select(Job).where(Job.media_file_id == media_id))
+            ).scalar_one()
+            assert job.state is JobState.SUCCESS, (job.state, job.error_message)
+            mf2 = await session.get(MediaFile, media_id)
+            assert mf2 is not None and mf2.status is MediaStatus.DONE
+            assert mf2.path == str(final)
+            assert await session.get(MediaFile, stale_id) is None
+        assert final.exists() and not src.exists()
+    finally:
+        async with session_scope() as session:
+            lib_obj = await session.get(Library, lib_id)
+            if lib_obj is not None:
+                await session.delete(lib_obj)
         await dispose_engine()

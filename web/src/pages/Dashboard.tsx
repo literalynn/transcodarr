@@ -726,8 +726,9 @@ function GainByBucketCard({ period, media }: StatsFilter) {
 // ---------------------------------------------------------------------------
 // Codecs de la bibliothèque (état actuel)
 // ---------------------------------------------------------------------------
-/** Couleur par CODEC (jamais par rang) : les trois codecs qui comptent pour
- *  un transcodeur, dans l'ordre des séries validé ; le reste est regroupé. */
+/** Couleur par CODEC (jamais par rang), la même quel que soit le filtre : les
+ *  codecs qui comptent pour un transcodeur, dans l'ordre des séries validé
+ *  (vidéo 1→3, musique 4→6) ; le reste est regroupé. */
 const CODEC_SLOTS: { codec: string; color: string }[] = [
   { codec: "hevc", color: CHART.cat1 },
   { codec: "av1", color: CHART.cat2 },
@@ -735,10 +736,12 @@ const CODEC_SLOTS: { codec: string; color: string }[] = [
 ];
 
 const AUDIO_CODEC_SLOTS: { codec: string; color: string }[] = [
-  { codec: "opus", color: CHART.cat1 },
-  { codec: "flac", color: CHART.cat2 },
-  { codec: "mp3", color: CHART.cat3 },
+  { codec: "opus", color: CHART.cat4 },
+  { codec: "flac", color: CHART.cat5 },
+  { codec: "mp3", color: CHART.cat6 },
 ];
+
+const ALL_CODEC_SLOTS = [...CODEC_SLOTS, ...AUDIO_CODEC_SLOTS];
 
 const CODEC_NAMES: Record<string, string> = {
   hevc: "HEVC",
@@ -776,7 +779,7 @@ function sharePercent(value: number, total: number): string {
 function CodecsCard({ media }: { media: MediaFilter }) {
   const t = useT();
   const { data } = useCodecStats(media);
-  const slots = media === "music" ? AUDIO_CODEC_SLOTS : CODEC_SLOTS;
+  const slots = media === "music" ? AUDIO_CODEC_SLOTS : media === "video" ? CODEC_SLOTS : ALL_CODEC_SLOTS;
   const current = data?.current ?? {};
   const total = Object.values(current).reduce((sum, n) => sum + n, 0);
 

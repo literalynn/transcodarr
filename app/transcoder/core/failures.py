@@ -251,7 +251,7 @@ _PATTERNS: tuple[tuple[re.Pattern[str], FailureCategory, str], ...] = (
             re.I,
         ),
         FailureCategory.HW_ENCODER,
-        "erreur de l'encodeur matériel",
+        "erreur de l'encodeur",  # GPU en vidéo, CPU (libopus…) en musique
     ),
     (
         re.compile(
@@ -318,6 +318,14 @@ def classify_validation_failure(
     """Contrôle de validation en échec → catégorie."""
     if check_name == "1_exit_code":
         return classify_ffmpeg_failure(exit_code, ffmpeg_log)
+    if ffmpeg_log and "nothing was encoded" in ffmpeg_log:
+        # Code 0 mais aucune trame : FFmpeg n'a rien su lire de la source (FLAC
+        # 6 canaux 176,4 kHz pourtant valides) ; un repli n'y changerait rien
+        return Failure(
+            FailureCategory.SOURCE_UNREADABLE,
+            f"{check_name} : sortie vide, FFmpeg n'a lu aucune trame de la source",
+            key_error_lines(ffmpeg_log),
+        )
     category = _CHECK_CATEGORIES.get(check_name, FailureCategory.UNKNOWN)
     detail: str | None = None
     if check_name == "5_integrity":

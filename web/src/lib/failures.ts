@@ -69,8 +69,9 @@ export const FAILURE_CATEGORIES: Record<string, FailureMeta> = {
     group: "environment",
   },
   hw_encoder: {
-    label: "Erreur de l'encodeur GPU",
-    explanation: "L'encodeur matériel (QSV/VAAPI) a refusé ou interrompu l'encodage.",
+    label: "Erreur de l'encodeur",
+    explanation:
+      "L'encodeur (GPU QSV/VAAPI en vidéo, CPU en musique) a refusé ou interrompu l'encodage.",
     remedy: "Nouvelle tentative avec l'autre API du GPU (QSV ↔ VAAPI).",
     group: "hardware",
   },

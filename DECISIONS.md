@@ -571,3 +571,30 @@ spécial) dont l'audio saute de 269 s — mkvmerge n'y voit que 3 pistes sur 9.
   garde vaut aussi pour la vidéo (`film.avi` → `film.mkv`).
 - **Dashboard** : filtre Tout / Vidéo / Musique sur toutes les statistiques ;
   « tout » additionne temps GPU et CPU (« h d'encodage »).
+
+## 2026-11-04 — Première semaine de musique en production (0.11.1)
+
+- **Opus multicanal** : au-delà de 2 canaux, libopus n'accepte que la
+  disposition Vorbis (3.0, quad, 5.0, 5.1, 6.1, 7.1) et FFmpeg ne convertit pas
+  seul. Un FLAC 5 canaux, lu en 5.0(side), échouait en EINVAL (11 fichiers).
+  La source passe par `aformat` vers la disposition Vorbis du même nombre de
+  canaux : aucun canal perdu, plutôt qu'un mixage stéréo.
+- **Pochette abîmée ≠ audio corrompu** : FFmpeg décode la pochette pour
+  analyser le fichier, même avec `-map 0:a:0`. Le contrôle d'intégrité musical
+  gardait tous les messages ; il écarte désormais ceux des décodeurs d'image
+  (mjpeg, png…), et seulement eux (15 faux positifs).
+- **Sortie vide = source illisible** : FFmpeg 7.1 ne lit aucune trame de
+  certains FLAC pourtant valides (6 canaux, 176,4 kHz, blocs de 16384) et
+  sort en code 0 (« nothing was encoded »). Classé source illisible, sans
+  repli : aucune stratégie ne change le démultiplexeur. Contournement manuel :
+  réencoder ces FLAC avec `flac` en blocs de 4096, sans perte.
+- **Fiche périmée au chemin final** : le remplacement refuse d'écraser un
+  fichier, donc une fiche qui occupe déjà le chemin final (un `.opus` remplacé
+  par un nouveau FLAC de Lidarr avant le scan) décrit un fichier disparu. Elle
+  est supprimée à la finalisation, avec l'historique de ce fichier disparu.
+  Avant, la contrainte d'unicité annulait le job alors que le fichier était
+  déjà remplacé (95 jobs les 30 et 31/10).
+- **Libellé** : « erreur de l'encodeur » (GPU en vidéo, CPU en musique) au
+  lieu de « encodeur matériel ».
+- **Codecs de la bibliothèque** : Opus, FLAC et MP3 ont leur couleur (séries 4
+  à 6 de la palette validée), stable quel que soit le filtre.

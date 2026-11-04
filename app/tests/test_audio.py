@@ -172,6 +172,7 @@ def _cmd(target: AudioTarget, **overrides: Any) -> list[str]:
         "cover_index": None,
         "metadata_path": None,
         "src_sample_rate": 44100,
+        "src_channels": 2,
     }
     args.update(overrides)
     return build_audio_cmd(**args)
@@ -194,6 +195,16 @@ def test_cmd_mp3_hires_cover_stream() -> None:
     cmd = _cmd(target, cover_index=1, src_sample_rate=96000)
     assert _has(cmd, "-map", "0:1", "-c:v", "copy", "-disposition:v:0", "attached_pic")
     assert _has(cmd, "-c:a", "libmp3lame", "-b:a", "320k") and _has(cmd, "-ar", "48000")
+
+
+def test_cmd_opus_multichannel_forces_vorbis_layout() -> None:
+    # Production : FLAC 5 canaux en 5.0(side) → libopus EINVAL sans conversion
+    assert _has(_cmd(OPUS_128, src_channels=5), "-af", "aformat=channel_layouts=5.0")
+    assert _has(_cmd(OPUS_128, src_channels=6), "-af", "aformat=channel_layouts=5.1")
+    assert "-af" not in _cmd(OPUS_128)  # stéréo : rien à convertir
+    assert "-af" not in _cmd(OPUS_128, src_channels=None)
+    aac = AudioTarget(AudioCodec.AAC, AudioContainer.M4A, 192)
+    assert "-af" not in _cmd(aac, src_channels=6)  # l'encodeur AAC convertit seul
 
 
 def test_cmd_m4a_tag_in_encoding_tool() -> None:
@@ -314,6 +325,7 @@ async def test_e2e_flac_with_cover(
         cover_index=None if metadata_path else int(cover_info["index"]),
         metadata_path=metadata_path,
         src_sample_rate=sample_rate(probe.raw),
+        src_channels=probe.audio_streams[0].get("channels"),
     )
     result = await run_ffmpeg(
         cmd, duration_s=probe.duration_s, log_path=str(tmp_path / "job.log")
@@ -337,3 +349,39 @@ async def test_e2e_flac_with_cover(
     raw = report.dst_probe.raw
     tags = [raw["format"].get("tags") or {}, *[s.get("tags") or {} for s in raw["streams"]]]
     assert any(k.upper() == "TITLE" and v == "Piste" for t in tags for k, v in t.items())
+
+
+@pytest.fixture
+def flac_5_0_side(tmp_path: Path) -> Path:
+    assert FFMPEG is not None
+    src = tmp_path / "01.flac"
+    subprocess.run(
+        [FFMPEG, "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=4:c=pink:r=48000:a=0.5",
+         "-af", "pan=5.0(side)|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0", "-c:a", "flac", str(src)],
+        check=True, capture_output=True,
+    )
+    return src
+
+
+@pytest.mark.skipif(FFMPEG is None or FFPROBE is None, reason="ffmpeg/ffprobe absents")
+async def test_e2e_opus_from_5_0_side_flac(tmp_path: Path, flac_5_0_side: Path) -> None:
+    """Disposition du FLAC 5 canaux (5.0(side)) refusée telle quelle par libopus."""
+    assert FFMPEG is not None and FFPROBE is not None
+    src = flac_5_0_side
+    probe = await probe_file(str(src), FFPROBE, frames=False)
+    assert probe.audio_streams[0]["channel_layout"] == "5.0(side)"
+    dst = tmp_path / "out.opus"
+    cmd = _cmd(
+        OPUS_128, ffmpeg_path=FFMPEG, src_path=str(src), dst_path=str(dst),
+        src_sample_rate=48000, src_channels=probe.audio_streams[0]["channels"],
+    )
+    result = await run_ffmpeg(cmd, duration_s=probe.duration_s, log_path=str(tmp_path / "log"))
+    assert result.exit_code == 0, result.log_tail
+    report = await validate_audio_output(
+        ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE, src_probe=probe,
+        src_size_bytes=src.stat().st_size, dst_path=str(dst), exit_code=0,
+        target=OPUS_128, min_gain_percent=10.0,
+    )
+    assert report.outcome is ValidationOutcome.PASSED, report.failure_reason
+    assert report.dst_probe is not None
+    assert report.dst_probe.audio_streams[0]["channels"] == 5  # canaux conservés

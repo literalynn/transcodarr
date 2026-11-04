@@ -272,8 +272,11 @@ confirmation) — your media libraries are never touched.
   it). Jellyfin keeps the original `DateCreated` across quality upgrades: if you want
   upgrades re-encoded, rely on mtime and leave the Jellyfin integration off.
 - **Music and Lidarr** — re-encoding a FLAC to Opus changes its extension
-  (`.flac` → `.opus`): Lidarr and Jellyfin see a new file on their next rescan. Turn off
-  upgrades in the Lidarr quality profile, or it may download the FLAC again.
+  (`.flac` → `.opus`) and Lidarr is not told. Until it rescans the artist folder, the
+  album looks missing: a search or an automatic downloader (Soularr…) can fetch it again,
+  and the import then deletes the Opus or drops a second copy next to it, even with
+  upgrades turned off. Rescan changed artist folders often, e.g. a cron job sending
+  Lidarr's `RescanFolders` command. Jellyfin picks up the new file on its next scan.
 - **MP4 output** is supported but lossy by nature (no font attachments, text subs become
   mov_text, image subs fail explicitly). MKV is the default for a reason.
 

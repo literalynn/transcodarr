@@ -128,6 +128,19 @@ def test_integrity_crash_is_validator_crash() -> None:
     assert f.category is FailureCategory.VALIDATOR_CRASH
 
 
+def test_empty_output_is_unreadable_source() -> None:
+    """Prod : FLAC 6 canaux 176,4 kHz dont FFmpeg ne lit aucune trame (code 0)."""
+    log = (
+        "[out#0/opus @ 0x5] Output file is empty, nothing was encoded(check -ss / -t / "
+        "-frames parameters if used)\nsize=     367KiB time=N/A bitrate=N/A speed=N/A\n"
+    )
+    f = classify_validation_failure(
+        "3_codec", "ffprobe a échoué : code 1", exit_code=0, ffmpeg_log=log
+    )
+    assert f.category is FailureCategory.SOURCE_UNREADABLE  # sans repli : définitif
+    assert "aucune trame" in f.message
+
+
 def test_exit_code_check_uses_log() -> None:
     f = classify_validation_failure(
         "1_exit_code", "code de sortie 218", exit_code=218, ffmpeg_log=LOG_218_MOV_TEXT
